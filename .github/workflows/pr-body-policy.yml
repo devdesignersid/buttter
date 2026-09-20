@@ -1,0 +1,35 @@
+name: Pull request body policy
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  validate:
+    name: PR body policy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out trusted policy code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: rust@1.98.1
+          fallback: none
+
+      - name: Validate pull request body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" |
+            cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
+              validate-pr-body --github-repository "$GITHUB_REPOSITORY"
