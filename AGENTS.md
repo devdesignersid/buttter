@@ -20,6 +20,7 @@ These instructions apply to the entire repository.
 - Show the complete diff and wait for the user to say "Approved" before committing.
 - Before committing, inspect the proposed commit contents and exclude every file, including dotfiles, that is outside the approved change scope.
 - Format every commit message according to Conventional Commits 1.0.0.
+- Format every pull request body according to `.github/pull_request_template.md` and pass the repository PR-body policy check.
 - Never commit without that approval.
 - Claim completion only after all acceptance criteria and applicable quality gates pass.
 

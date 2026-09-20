@@ -1,0 +1,48 @@
+name: Repository policy quality
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/pr-body-policy.yml
+      - .github/workflows/repo-policy-quality.yml
+      - tools/repo-policy/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/pr-body-policy.yml
+      - .github/workflows/repo-policy-quality.yml
+      - tools/repo-policy/**
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Repository policy quality
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: rust@1.98.1 + rustfmt + clippy
+          fallback: none
+
+      - name: Install pinned coverage tool
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-llvm-cov@0.9.1
+          fallback: none
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path tools/repo-policy/Cargo.toml -- --check
+
+      - name: Lint all targets
+        run: cargo clippy --manifest-path tools/repo-policy/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test with complete line coverage
+        run: cargo llvm-cov --manifest-path tools/repo-policy/Cargo.toml --fail-under-lines 100
