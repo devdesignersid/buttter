@@ -16,6 +16,7 @@ These instructions apply to the entire repository.
   - explain how it avoids unnecessary complexity and overengineering.
 - Wait for the user to approve the proposed approach before implementing it.
 - Keep every change small enough for complete human review.
+- Put exactly one independently deployable change in each short-lived branch and pull request, represented by exactly one commit.
 - Show the complete diff and wait for the user to say "Approved" before committing.
 - Before committing, inspect the proposed commit contents and exclude every file, including dotfiles, that is outside the approved change scope.
 - Format every commit message according to Conventional Commits 1.0.0.
@@ -72,11 +73,18 @@ After implementation and before claiming completion, review the complete diff an
 ## Branching
 
 - Use Continuous Integration with `main` as the mainline.
+- Enforce the `main` branch workflow with the repository-managed hooks while GitHub branch protection is unavailable for the private repository.
+- Configure each clone with `git config core.hooksPath .githooks` before making changes.
+- Do not bypass the repository-managed hooks.
+- Reconsider additional automated policy enforcement only when CI/CD work is separately approved.
 - Never commit or push changes directly to `main`.
 - Do not make working-tree changes while `main` is checked out.
 - Create a short-lived branch before making each change.
 - Keep the committed state of `main` healthy.
 - Integrate changes into `main` only through a pull request whose applicable tests and quality gates pass.
+- A short-lived branch may use any enabled merge method.
+- Merge long-lived branches with normal merge commits.
+- Keep automatic deletion of merged pull-request branches enabled.
 - Integrate each approved, healthy increment as soon as it can be shared.
 - Do not accumulate more than one day of implementation work without opening or updating its pull request.
 - Do not leave completed work on a long-lived branch.

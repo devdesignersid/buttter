@@ -4,9 +4,11 @@
 
 ## Current Status
 
-The repository is in pre-implementation setup. It contains no Rust product code, Cargo manifest, or runnable application.
+Phase 0.5 repository setup is complete. The repository contains no Rust product code, Cargo manifest, or runnable application.
 
-Phase 0.5 permits only minimal repository documentation and configuration.
+No subsequent investigation phase is authorized. Its scope and acceptance criteria must be approved before work begins. The current repository guardrail work does not permit Rust or Cargo changes, dependency installation, GPUI work, CI implementation, or product code.
+
+Repository workflow and review guardrails are defined in [AGENTS.md](AGENTS.md).
 
 ## Confirmed Intent
 

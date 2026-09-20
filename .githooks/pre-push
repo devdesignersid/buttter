@@ -1,0 +1,8 @@
+#!/bin/sh
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    printf '%s\n' "Push rejected: update main through an approved pull request." >&2
+    exit 1
+  fi
+done

@@ -1,0 +1,8 @@
+#!/bin/sh
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=
+
+if [ "$branch" = "main" ]; then
+  printf '%s\n' "Commit rejected: commit on a short-lived branch, not main." >&2
+  exit 1
+fi
