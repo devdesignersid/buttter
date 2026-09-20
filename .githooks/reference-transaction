@@ -1,0 +1,14 @@
+#!/bin/sh
+
+if [ "$1" != "prepared" ]; then
+  exit 0
+fi
+
+origin_main=$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null) || origin_main=
+
+while read -r old_oid new_oid ref_name; do
+  if [ "$ref_name" = "refs/heads/main" ] && [ "$new_oid" != "$origin_main" ]; then
+    printf '%s\n' "Update rejected: local main may only match origin/main." >&2
+    exit 1
+  fi
+done

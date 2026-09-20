@@ -9,8 +9,9 @@
 ## Constraints
 
 - macOS is the initial platform.
-- Phase 0.5 permits minimal repository documentation and configuration only.
-- Phase 0.5 does not permit Rust code, dependency installation, GPUI experiments, CI implementation, or remote GitHub setting changes.
+- Phase 0.5 repository setup is complete.
+- No subsequent investigation phase is authorized until its scope and acceptance criteria are separately approved.
+- The current repository guardrail work does not permit Rust or Cargo changes, dependency installation, GPUI work, CI implementation, or product code.
 
 Repository workflow and review constraints are defined in [AGENTS.md](../AGENTS.md).
 
