@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -82,12 +82,18 @@ fn run_with_stdin(args: &[&str], body: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start repo-policy");
-    child
+    if let Err(error) = child
         .stdin
         .take()
         .expect("open child stdin")
         .write_all(body.as_bytes())
-        .expect("write body to child stdin");
+    {
+        assert_eq!(
+            error.kind(),
+            ErrorKind::BrokenPipe,
+            "write body to child stdin: {error}"
+        );
+    }
     child.wait_with_output().expect("collect command output")
 }
 
