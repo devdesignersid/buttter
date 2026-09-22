@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -428,12 +428,18 @@ fn requires_valid_and_complete_online_arguments() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child
+        if let Err(error) = child
             .stdin
             .take()
             .unwrap()
             .write_all(VALID_PR_BODY.as_bytes())
-            .unwrap();
+        {
+            assert_eq!(
+                error.kind(),
+                ErrorKind::BrokenPipe,
+                "write body to child stdin: {error}"
+            );
+        }
         let output = child.wait_with_output().unwrap();
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
