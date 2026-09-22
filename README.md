@@ -18,7 +18,7 @@ Pull request bodies must follow [the repository template](.github/pull_request_t
 cargo run --manifest-path tools/repo-policy/Cargo.toml -- validate-pr-body path/to/body.md
 ```
 
-CI additionally verifies that the related `Closes #N` reference identifies an open issue in this repository. After the bootstrap workflow reaches `main`, configure the `PR body policy` check as required so a ready-for-review pull request cannot merge when validation fails.
+CI additionally verifies that the related `Closes #N` reference identifies an open, structurally complete work item. The work item must have a current `implementation-approved` label applied by `devdesignersid` before the pull request was created. The `PR body policy` check is required on `main`, so a ready-for-review pull request cannot merge when validation fails.
 
 See the [Repository Policy CLI documentation](tools/repo-policy/README.md) for the complete validation contract, usage, CI trust boundary, and maintenance workflow.
 
