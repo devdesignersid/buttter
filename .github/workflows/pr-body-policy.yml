@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   issues: read
+  pull-requests: read
 
 jobs:
   validate:
@@ -32,4 +33,6 @@ jobs:
         run: |
           printf '%s' "$PR_BODY" |
             cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
-              validate-pr-body --github-repository "$GITHUB_REPOSITORY"
+              validate-pr-body \
+                --github-repository "$GITHUB_REPOSITORY" \
+                --pull-request-number "${{ github.event.pull_request.number }}"

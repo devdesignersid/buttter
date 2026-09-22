@@ -34,6 +34,16 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
   validate-pr-body --github-repository devdesignersid/buttter path/to/body.md
 ```
 
+For CI, include the pull request number to enforce work-item readiness and approval:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  validate-pr-body \
+    --github-repository devdesignersid/buttter \
+    --pull-request-number 10 \
+    path/to/body.md
+```
+
 Print built-in help:
 
 ```sh
@@ -69,6 +79,35 @@ The section must contain exactly one line in this form:
 ```
 
 The number must be greater than zero. When `--github-repository OWNER/REPO` is supplied, the tool invokes `gh api` using GitHub REST API version `2022-11-28` and fails unless the number identifies an open issue. Closed issues, pull requests, missing issues, authentication failures, rate limits, network failures, unavailable GitHub CLI installations, and unexpected API responses fail closed.
+
+When `--pull-request-number` is supplied, it must be a positive integer and requires `--github-repository`. The linked issue must also pass the work-item and approval contracts below.
+
+### Linked work item
+
+These level-three headings must each occur exactly once and in this order, matching `.github/ISSUE_TEMPLATE/work-item.yml`:
+
+1. `### Problem`
+2. `### Desired observable outcome`
+3. `### Acceptance criteria`
+4. `### Non-goals`
+5. `### Decisions needed`
+6. `### Evidence plan`
+7. `### Applicable quality gates`
+8. `### Review scope`
+
+Every section must contain visible content after HTML comments are removed. Empty bullets and empty checklist items are placeholders and do not count. Acceptance criteria must consist of one or more non-empty checked or unchecked checklist items. Non-goals may be exactly `None`; unresolved decisions are rejected, so Decisions needed must be exactly `None`. The validator checks structure, not whether the stated requirements or criteria are substantively good or testable.
+
+### Implementation approval
+
+The linked issue must currently have the `implementation-approved` label. The latest matching `labeled` or `unlabeled` issue timeline event must:
+
+- be a `labeled` event;
+- identify `devdesignersid` as the actor; and
+- have a GitHub `created_at` timestamp strictly earlier than the pull request's GitHub `created_at` timestamp.
+
+The timeline request is paginated. Missing, malformed, removed, unauthorized, equal-time, or late approval records fail closed, as do all CLI, API, authentication, rate-limit, network, UTF-8, and response errors. Removing and validly reapplying the label creates a new approval record; only the latest event controls.
+
+Pull-request creation is the defined implementation boundary because Git author and committer timestamps are contributor-controlled. This policy does not prove when local work began. A GitHub identity is also not independent human approval when an agent can use the same credentials; the allowlist proves only which credential applied the label.
 
 ### Acceptance criteria
 
@@ -131,13 +170,13 @@ Provide one or more non-empty bullet items. Use `- None` when nothing remains un
 
 `.github/workflows/pr-body-policy.yml` runs for pull request creation, edits, reopening, synchronization, and transitions to ready for review. Draft pull requests may remain failing while incomplete; ready-for-review pull requests are expected to pass.
 
-The workflow uses `pull_request_target`, checks out the pull request's base commit, and executes only trusted policy code from that commit. It does not check out or execute code from the pull request. Its token has only `contents: read` and `issues: read` permissions. The pull request body is passed as data through an environment variable rather than evaluated as shell code.
+The workflow uses `pull_request_target`, checks out the pull request's base commit, and executes only trusted policy code from that commit. It does not check out or execute code from the pull request. Its token has only `contents: read`, `issues: read`, and `pull-requests: read` permissions. The pull request body is passed as data through an environment variable rather than evaluated as shell code.
 
 `.github/workflows/repo-policy-quality.yml` runs formatting, Clippy, tests, and the 100% line-coverage gate when the policy tool or its workflows change. That workflow uses the pull request code but has read-only repository permissions and does not request or use repository secrets.
 
 ### Server-side enforcement
 
-The `PR body policy` status check must be required by a GitHub ruleset on `main`; otherwise CI only detects and reports violations. The initial workflow is a bootstrap exception because a trusted `pull_request_target` workflow cannot run from the default branch until it has been merged there. Configure the required check immediately after that bootstrap merge.
+The `PR body policy` status check is required by the active `Require pull request body policy on main` GitHub ruleset; otherwise CI would only detect and report violations.
 
 Online issue verification reflects the issue state when the workflow runs. If an issue is closed without another supported pull request event, rerun the workflow before relying on the previous result.
 
@@ -160,14 +199,14 @@ cargo install cargo-llvm-cov --version 0.9.1 --locked
 
 ## Maintaining the policy
 
-When the pull request contract changes:
+When the pull request or work-item contract changes:
 
-1. Update `.github/pull_request_template.md`.
+1. Update `.github/pull_request_template.md` or `.github/ISSUE_TEMPLATE/work-item.yml` as applicable.
 2. Add or change tests under `tools/repo-policy/tests` and confirm they fail for the expected reason.
 3. Make the minimum validator change in `tools/repo-policy/src/main.rs`.
 4. Update this document and built-in help when commands or behavior change.
 5. Run all development quality gates, including 100% line coverage.
 6. Review workflow permissions and the trusted-code boundary if CI behavior changes.
-7. Confirm the GitHub ruleset still requires the `PR body policy` check after the workflow reaches `main`.
+7. Confirm the GitHub ruleset still requires the `PR body policy` check.
 
-Keep template requirements, validator behavior, tests, and documentation in the same independently deployable change so they cannot drift silently.
+Keep template requirements, validator behavior, tests, and documentation in the same independently deployable change so they cannot drift silently. Changes to `APPROVAL_LABEL` or `AUTHORIZED_APPROVERS` in `src/main.rs` are policy changes and require the same review.
