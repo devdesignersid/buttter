@@ -22,6 +22,7 @@ These instructions apply to the entire repository.
 - Format every commit message according to Conventional Commits 1.0.0.
 - Format every pull request body according to `.github/pull_request_template.md` and pass the repository PR-body policy check.
 - Never commit without that approval.
+- Review every GitHub Actions workflow applicable to the change according to its configured trigger. Verify that PR-triggered workflows pass before merge and that merge-triggered workflows pass after merge. Do not claim completion until every workflow associated with the PR lifecycle has completed successfully.
 - Claim completion only after all acceptance criteria and applicable quality gates pass.
 
 ## Evidence
