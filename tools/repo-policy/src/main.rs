@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::process::{self, Command};
 
-const USAGE: &str = "Repository policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n  repo-policy validate-commit-message [MESSAGE_FILE]\n  repo-policy validate-pr-commits --github-repository OWNER/REPO --pull-request-number NUMBER\n\nCommands:\n  validate-pr-body         Validate the required pull request body and linked work item.\n  validate-commit-message  Validate one Conventional Commit message.\n  validate-pr-commits      Validate every non-bot commit in a pull request.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify repository data.\n  --pull-request-number NUMBER\n      Select the pull request to verify.\n  -h, --help\n      Print this help.\n\nInput:\n  File commands read the supplied file or standard input when no file is supplied.\n\nExit status:\n  0  The selected policy passed.\n  1  Arguments, input, policy, or GitHub verification failed.";
+const USAGE: &str = "Repository policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n  repo-policy validate-commit-message [MESSAGE_FILE]\n  repo-policy validate-pr-commits --github-repository OWNER/REPO --pull-request-number NUMBER\n\nCommands:\n  validate-pr-body         Validate the required pull request body and linked work item.\n  validate-commit-message  Validate one Conventional Commit message.\n  validate-pr-commits      Require one pull-request commit and validate its message.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify repository data.\n  --pull-request-number NUMBER\n      Select the pull request to verify.\n  -h, --help\n      Print this help.\n\nInput:\n  File commands read the supplied file or standard input when no file is supplied.\n\nExit status:\n  0  The selected policy passed.\n  1  Arguments, input, policy, or GitHub verification failed.";
 
 const COMMIT_TYPES: [&str; 11] = [
     "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
@@ -118,12 +118,11 @@ fn run_validate_pr_commits(command_arguments: &[String]) -> Result<(), String> {
     let expected_count = count
         .trim()
         .parse::<usize>()
-        .ok()
-        .filter(|count| *count > 0)
-        .ok_or_else(|| "GitHub commit data contained an invalid commit count".to_owned())?;
+        .map_err(|_| "GitHub commit data contained an invalid commit count".to_owned())?;
     if expected_count > 250 {
         return Err(
-            "GitHub commit data exceeds the pull-request endpoint's 250-commit limit".to_owned(),
+            "GitHub commit data exceeds the pull-request endpoint's 250-commit pagination limit"
+                .to_owned(),
         );
     }
 
@@ -138,9 +137,18 @@ fn run_validate_pr_commits(command_arguments: &[String]) -> Result<(), String> {
     let records = parse_commit_records(&response)?;
     if records.len() != expected_count {
         return Err(format!(
-            "GitHub commit data returned {} unique commits; expected {expected_count}",
+            "GitHub commit data pagination mismatch: the commit list returned {} unique commits; pull-request metadata reported {expected_count}",
             records.len()
         ));
+    }
+    match records.len() {
+        0 => return Err("Pull request contains zero commits; exactly one is required".to_owned()),
+        1 => {}
+        count => {
+            return Err(format!(
+                "Pull request contains {count} commits; exactly one is required"
+            ));
+        }
     }
 
     for record in records {
@@ -155,7 +163,7 @@ fn run_validate_pr_commits(command_arguments: &[String]) -> Result<(), String> {
         })?;
     }
 
-    println!("Pull request commit messages are valid.");
+    println!("Pull request contains exactly one commit and its message is valid.");
     Ok(())
 }
 
@@ -277,9 +285,6 @@ fn parse_commit_records(response: &str) -> Result<Vec<CommitRecord>, String> {
             author,
             message,
         });
-    }
-    if records.is_empty() {
-        return Err("GitHub commit data did not contain any commits".to_owned());
     }
     Ok(records)
 }

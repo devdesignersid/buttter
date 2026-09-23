@@ -26,7 +26,17 @@ Commit messages must follow the repository's documented Conventional Commits gra
 cargo run --manifest-path tools/repo-policy/Cargo.toml -- validate-commit-message path/to/message
 ```
 
-Trusted CI validates every pull-request commit, except Git-generated merge commits and commits attributed by GitHub to a `[bot]` account. The `Commit message policy` check must be required on `main`.
+Trusted CI requires exactly one commit in the GitHub pull-request commit list and validates its message. Git-generated merge commit messages and messages attributed by GitHub to a `[bot]` account are exempt from message validation, but not from the one-commit limit. The `Commit message policy` check must be required on `main`.
+
+To update a pull request without adding another commit, stage the changes and amend its existing commit, then update the remote branch safely:
+
+```sh
+git add <paths>
+git commit --amend
+git push --force-with-lease
+```
+
+Do not bypass the repository-managed hooks. `--force-with-lease` refuses to overwrite remote work that was not present in the expected remote branch state.
 
 See the [Repository Policy CLI documentation](tools/repo-policy/README.md) for the complete validation contracts, usage, CI trust boundaries, and maintenance workflow.
 
