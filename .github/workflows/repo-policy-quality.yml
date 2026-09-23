@@ -3,12 +3,16 @@ name: Repository policy quality
 on:
   pull_request:
     paths:
+      - .githooks/commit-msg
+      - .github/workflows/commit-message-policy.yml
       - .github/workflows/pr-body-policy.yml
       - .github/workflows/repo-policy-quality.yml
       - tools/repo-policy/**
   push:
     branches: [main]
     paths:
+      - .githooks/commit-msg
+      - .github/workflows/commit-message-policy.yml
       - .github/workflows/pr-body-policy.yml
       - .github/workflows/repo-policy-quality.yml
       - tools/repo-policy/**
@@ -20,6 +24,7 @@ jobs:
   quality:
     name: Repository policy quality
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

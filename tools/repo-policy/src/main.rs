@@ -1,9 +1,14 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::process::{self, Command};
 
-const USAGE: &str = "Repository pull request policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n\nCommands:\n  validate-pr-body  Validate the required pull request body and linked work item.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify the linked issue.\n  --pull-request-number NUMBER\n      Also verify work-item readiness and approval before pull request creation.\n  -h, --help\n      Print this help.\n\nInput:\n  Reads BODY_FILE when supplied; otherwise reads the pull request body from standard input.\n\nExit status:\n  0  The body and any requested GitHub verification passed.\n  1  Arguments, input, policy, or GitHub verification failed.";
+const USAGE: &str = "Repository policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n  repo-policy validate-commit-message [MESSAGE_FILE]\n  repo-policy validate-pr-commits --github-repository OWNER/REPO --pull-request-number NUMBER\n\nCommands:\n  validate-pr-body         Validate the required pull request body and linked work item.\n  validate-commit-message  Validate one Conventional Commit message.\n  validate-pr-commits      Validate every non-bot commit in a pull request.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify repository data.\n  --pull-request-number NUMBER\n      Select the pull request to verify.\n  -h, --help\n      Print this help.\n\nInput:\n  File commands read the supplied file or standard input when no file is supplied.\n\nExit status:\n  0  The selected policy passed.\n  1  Arguments, input, policy, or GitHub verification failed.";
+
+const COMMIT_TYPES: [&str; 11] = [
+    "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
+];
 
 const HEADINGS: [&str; 9] = [
     "## Related Issue",
@@ -59,12 +64,17 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
     let Some((command, command_arguments)) = arguments.split_first() else {
         return Err(USAGE.to_owned());
     };
-    if command != "validate-pr-body" {
-        return Err(USAGE.to_owned());
+    match command.as_str() {
+        "validate-pr-body" => run_validate_pr_body(command_arguments),
+        "validate-commit-message" => run_validate_commit_message(command_arguments),
+        "validate-pr-commits" => run_validate_pr_commits(command_arguments),
+        _ => Err(USAGE.to_owned()),
     }
+}
 
+fn run_validate_pr_body(command_arguments: &[String]) -> Result<(), String> {
     let arguments = parse_validate_arguments(command_arguments)?;
-    let body = read_body(arguments.body_path.as_deref())?;
+    let body = read_text(arguments.body_path.as_deref(), "pull request body")?;
     let validated = validate_body(&body).map_err(|violations| {
         format!(
             "Pull request body policy violations:\n- {}",
@@ -80,6 +90,72 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
     }
 
     println!("Pull request body is valid.");
+    Ok(())
+}
+
+fn run_validate_commit_message(command_arguments: &[String]) -> Result<(), String> {
+    let path = match command_arguments {
+        [] => None,
+        [path] if path != "-h" && path != "--help" => Some(path.as_str()),
+        _ => return Err(USAGE.to_owned()),
+    };
+    let message = read_text(path, "commit message")?;
+    validate_commit_message(&message)
+        .map_err(|violation| format!("Commit message policy violation: {violation}"))?;
+    println!("Commit message is valid.");
+    Ok(())
+}
+
+fn run_validate_pr_commits(command_arguments: &[String]) -> Result<(), String> {
+    let (repository, pull_request_number) = parse_pr_commit_arguments(command_arguments)?;
+    let pull_endpoint = format!("repos/{repository}/pulls/{pull_request_number}");
+    let count = github_api(
+        &pull_endpoint,
+        r#".commits | if type == "number" then . else error("malformed commit count") end"#,
+        false,
+        &format!("pull request #{pull_request_number} commit count"),
+    )?;
+    let expected_count = count
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|count| *count > 0)
+        .ok_or_else(|| "GitHub commit data contained an invalid commit count".to_owned())?;
+    if expected_count > 250 {
+        return Err(
+            "GitHub commit data exceeds the pull-request endpoint's 250-commit limit".to_owned(),
+        );
+    }
+
+    let commits_endpoint = format!("{pull_endpoint}/commits");
+    let query = r#".[] | if ((.sha | type) == "string" and (.commit.message | type) == "string" and ((.author == null) or ((.author.login | type) == "string"))) then [(.sha | @uri), ((.author.login // "") | @uri), (.commit.message | @uri)] | join("\t") else error("malformed commit data") end"#;
+    let response = github_api(
+        &commits_endpoint,
+        query,
+        true,
+        &format!("pull request #{pull_request_number} commit data"),
+    )?;
+    let records = parse_commit_records(&response)?;
+    if records.len() != expected_count {
+        return Err(format!(
+            "GitHub commit data returned {} unique commits; expected {expected_count}",
+            records.len()
+        ));
+    }
+
+    for record in records {
+        if is_verified_bot(&record.author) {
+            continue;
+        }
+        validate_commit_message(&record.message).map_err(|violation| {
+            format!(
+                "Commit message policy violation in commit {}: {violation}",
+                record.sha
+            )
+        })?;
+    }
+
+    println!("Pull request commit messages are valid.");
     Ok(())
 }
 
@@ -143,7 +219,7 @@ fn valid_repository(repository: &str) -> bool {
     )
 }
 
-fn read_body(path: Option<&str>) -> Result<String, String> {
+fn read_text(path: Option<&str>, subject: &str) -> Result<String, String> {
     let bytes = if let Some(path) = path {
         fs::read(path).map_err(|error| format!("could not read `{path}`: {error}"))?
     } else {
@@ -154,7 +230,225 @@ fn read_body(path: Option<&str>) -> Result<String, String> {
         bytes
     };
 
-    String::from_utf8(bytes).map_err(|_| "pull request body must be valid UTF-8".to_owned())
+    String::from_utf8(bytes).map_err(|_| format!("{subject} must be valid UTF-8"))
+}
+
+fn parse_pr_commit_arguments(arguments: &[String]) -> Result<(String, u64), String> {
+    let parsed = parse_validate_arguments(arguments)?;
+    match (
+        parsed.repository,
+        parsed.pull_request_number,
+        parsed.body_path,
+    ) {
+        (Some(repository), Some(pull_request_number), None) => {
+            Ok((repository, pull_request_number))
+        }
+        _ => Err(USAGE.to_owned()),
+    }
+}
+
+struct CommitRecord {
+    sha: String,
+    author: String,
+    message: String,
+}
+
+fn parse_commit_records(response: &str) -> Result<Vec<CommitRecord>, String> {
+    let mut records = Vec::new();
+    let mut seen_shas = HashSet::new();
+    for line in response.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [sha, author, message] = fields.as_slice() else {
+            return Err("GitHub commit data contained a malformed record".to_owned());
+        };
+        let sha = percent_decode(sha)?;
+        let author = percent_decode(author)?;
+        let message = percent_decode(message)?;
+        if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("GitHub commit data contained an invalid commit SHA".to_owned());
+        }
+        if !seen_shas.insert(sha.clone()) {
+            return Err(format!(
+                "GitHub commit data contained duplicate commit SHA `{sha}`"
+            ));
+        }
+        records.push(CommitRecord {
+            sha,
+            author,
+            message,
+        });
+    }
+    if records.is_empty() {
+        return Err("GitHub commit data did not contain any commits".to_owned());
+    }
+    Ok(records)
+}
+
+fn percent_decode(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let Some(encoded) = bytes.get(index + 1..index + 3) else {
+                return Err("GitHub commit data contained invalid percent encoding".to_owned());
+            };
+            let Some(high) = hex_value(encoded[0]) else {
+                return Err("GitHub commit data contained invalid percent encoding".to_owned());
+            };
+            let Some(low) = hex_value(encoded[1]) else {
+                return Err("GitHub commit data contained invalid percent encoding".to_owned());
+            };
+            decoded.push(high * 16 + low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| "GitHub commit data contained invalid UTF-8".to_owned())
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn is_verified_bot(author: &str) -> bool {
+    author
+        .strip_suffix("[bot]")
+        .is_some_and(|name| !name.is_empty())
+}
+
+fn validate_commit_message(message: &str) -> Result<(), String> {
+    let message = message.replace("\r\n", "\n");
+    if message.contains('\r') {
+        return Err("commit message contains a bare carriage return".to_owned());
+    }
+    let message = message.trim_end_matches('\n');
+    let mut lines = message.split('\n');
+    let subject = lines.next().unwrap_or_default();
+    if subject.is_empty() {
+        return Err("subject must not be empty".to_owned());
+    }
+    if subject.starts_with("Merge ") {
+        return Ok(());
+    }
+
+    validate_commit_subject(subject)?;
+    let remaining: Vec<&str> = lines.collect();
+    if !remaining.is_empty() && !remaining[0].is_empty() {
+        return Err("subject and body must be separated by a blank line".to_owned());
+    }
+    validate_trailing_trailers(&remaining)
+}
+
+fn validate_commit_subject(subject: &str) -> Result<(), String> {
+    let Some((prefix, description)) = subject.split_once(':') else {
+        return Err("header must use `<type>[(scope)][!]: <description>`".to_owned());
+    };
+    if description.trim().is_empty() {
+        return Err("description must not be empty".to_owned());
+    }
+    if !description.starts_with(' ') {
+        return Err("header colon must be followed by one space".to_owned());
+    }
+
+    let prefix = prefix.strip_suffix('!').unwrap_or(prefix);
+    let commit_type = if prefix.ends_with(')') {
+        let Some(open) = prefix.find('(') else {
+            return Err("header scope must be enclosed in one pair of parentheses".to_owned());
+        };
+        let scope = &prefix[open + 1..prefix.len() - 1];
+        if scope.is_empty()
+            || scope
+                .chars()
+                .any(|character| matches!(character, '(' | ')') || character.is_control())
+        {
+            return Err("header scope must be non-empty and contain no parentheses".to_owned());
+        }
+        &prefix[..open]
+    } else {
+        if prefix.contains(['(', ')']) {
+            return Err("header scope must be enclosed in one pair of parentheses".to_owned());
+        }
+        prefix
+    };
+
+    if !COMMIT_TYPES.contains(&commit_type) {
+        return Err(format!(
+            "unsupported type `{commit_type}` in header; allowed types: {}",
+            COMMIT_TYPES.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+fn validate_trailing_trailers(lines: &[&str]) -> Result<(), String> {
+    let end = lines
+        .iter()
+        .rposition(|line| !line.is_empty())
+        .map_or(0, |index| index + 1);
+    if end == 0 {
+        return Ok(());
+    }
+    let start = lines[..end]
+        .iter()
+        .rposition(|line| line.is_empty())
+        .map_or(0, |index| index + 1);
+    let paragraph = &lines[start..end];
+    if !looks_like_trailer(paragraph[0]) {
+        return Ok(());
+    }
+
+    for line in paragraph {
+        if line.starts_with([' ', '\t']) {
+            continue;
+        }
+        validate_trailer(line)?;
+    }
+    Ok(())
+}
+
+fn looks_like_trailer(line: &str) -> bool {
+    let token = line
+        .split_once(": ")
+        .map(|(token, _)| token)
+        .or_else(|| line.strip_suffix(':'))
+        .or_else(|| line.split_once(" #").map(|(token, _)| token));
+    token.is_some_and(|token| token == "BREAKING CHANGE" || !token.contains(char::is_whitespace))
+}
+
+fn validate_trailer(line: &str) -> Result<(), String> {
+    let (token, value, separator_is_valid) = if let Some((token, value)) = line.split_once(':') {
+        (token, value, value.starts_with(' '))
+    } else if let Some((token, value)) = line.split_once(" #") {
+        (token, value, true)
+    } else {
+        return Err("trailer line must contain `: ` or ` #`".to_owned());
+    };
+
+    let breaking = matches!(token, "BREAKING CHANGE" | "BREAKING-CHANGE");
+    if token.is_empty()
+        || (!breaking
+            && !token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+    {
+        return Err(format!("invalid trailer token `{token}`"));
+    }
+    if !separator_is_valid || value.trim().is_empty() {
+        return if breaking {
+            Err("breaking-change trailer must have a description".to_owned())
+        } else {
+            Err(format!("trailer value for `{token}` must not be empty"))
+        };
+    }
+    Ok(())
 }
 
 fn validate_body(body: &str) -> Result<ValidatedBody, Vec<String>> {

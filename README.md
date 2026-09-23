@@ -20,7 +20,15 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- validate-pr-body path/
 
 CI additionally verifies that the related `Closes #N` reference identifies an open, structurally complete work item. The work item must have a current `implementation-approved` label applied by `devdesignersid` before the pull request was created. The `PR body policy` check is required on `main`, so a ready-for-review pull request cannot merge when validation fails.
 
-See the [Repository Policy CLI documentation](tools/repo-policy/README.md) for the complete validation contract, usage, CI trust boundary, and maintenance workflow.
+Commit messages must follow the repository's documented Conventional Commits grammar. The repository-managed `commit-msg` hook validates local commits. Validate a message directly with:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- validate-commit-message path/to/message
+```
+
+Trusted CI validates every pull-request commit, except Git-generated merge commits and commits attributed by GitHub to a `[bot]` account. The `Commit message policy` check must be required on `main`.
+
+See the [Repository Policy CLI documentation](tools/repo-policy/README.md) for the complete validation contracts, usage, CI trust boundaries, and maintenance workflow.
 
 ## Confirmed Intent
 
