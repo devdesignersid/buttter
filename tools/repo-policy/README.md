@@ -1,6 +1,6 @@
 # Repository Policy CLI
 
-`repo-policy` enforces the objective pull request body and commit-message requirements defined by this repository. It gives contributors immediate local diagnostics and gives CI a deterministic pass-or-fail result.
+`repo-policy` enforces the objective pull request body, commit-cardinality, and commit-message requirements defined by this repository. It gives contributors immediate local diagnostics and gives CI a deterministic pass-or-fail result.
 
 The tool does not judge subjective requirements such as readability, design quality, appropriate scope, or whether evidence is truthful. Those requirements still need human review.
 
@@ -51,7 +51,7 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
   validate-commit-message path/to/COMMIT_EDITMSG
 ```
 
-Omit the path to read a message from standard input. Validate every commit in a pull request through the authenticated GitHub CLI:
+Omit the path to read a message from standard input. Require exactly one commit in a pull request and validate its message through the authenticated GitHub CLI:
 
 ```sh
 cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
@@ -90,7 +90,9 @@ Subjects beginning with `Merge ` are exempt as Git-generated merge messages. Rev
 
 The `.githooks/commit-msg` hook passes Git's message file to `validate-commit-message`. Configure clones with `git config core.hooksPath .githooks`, as required by `AGENTS.md`.
 
-`validate-pr-commits` requests every pull-request commit with pagination and verifies the unique record count against pull-request metadata. GitHub API version `2022-11-28` limits this endpoint to 250 commits, so larger pull requests fail closed. A commit is exempt when GitHub attributes it to a non-empty login ending in `[bot]`. Names or email addresses embedded in Git commit metadata do not establish that exemption. Missing or duplicate commits, malformed records, invalid encoding, API errors, and nonconforming non-bot messages fail closed; diagnostics identify the rejected commit SHA.
+`validate-pr-commits` defines cardinality from the paginated GitHub pull-request commit list and requires exactly one unique commit. Pull-request metadata is used only to detect an incomplete or inconsistent paginated list. GitHub API version `2022-11-28` limits this endpoint to 250 commits, so larger pull requests fail closed with a pagination-limit diagnostic. Zero commits, multiple commits, pagination mismatches, missing or duplicate commits, malformed records, invalid encoding, and API errors fail closed explicitly.
+
+After cardinality passes, the command validates the one commit's message. Its message is exempt when GitHub attributes the commit to a non-empty login ending in `[bot]`; the commit itself is not exempt from the cardinality limit. Names or email addresses embedded in Git commit metadata do not establish the message exemption. Nonconforming non-bot messages fail closed with a diagnostic identifying the rejected commit SHA.
 
 ## Enforced body contract
 
@@ -212,7 +214,9 @@ Provide one or more non-empty bullet items. Use `- None` when nothing remains un
 
 The workflow uses `pull_request_target`, checks out the pull request's base commit, and executes only trusted policy code from that commit. It does not check out or execute code from the pull request. Its token has only `contents: read`, `issues: read`, and `pull-requests: read` permissions. The pull request body is passed as data through an environment variable rather than evaluated as shell code.
 
-`.github/workflows/commit-message-policy.yml` also uses `pull_request_target` and trusted policy code from the pull request's base commit. It reads paginated commit metadata through the GitHub API and never checks out or executes pull-request code. Its token has only `contents: read` and `pull-requests: read` permissions.
+`.github/workflows/commit-message-policy.yml` runs for pull request creation, edits, reopening, commit synchronization, and transitions to ready for review. Draft pull requests may remain failing while incomplete; ready-for-review pull requests must contain exactly one commit and pass message validation. The `edited` event covers base-branch changes, while `synchronize` covers commits being added, removed, or rebased.
+
+The workflow uses `pull_request_target` and trusted policy code from the pull request's base commit. It reads the paginated commit list and pull-request metadata through the GitHub API and never checks out or executes pull-request code. Its token has only `contents: read` and `pull-requests: read` permissions.
 
 `.github/workflows/repo-policy-quality.yml` runs formatting, Clippy, tests, and the 100% line-coverage gate when the policy tool, commit hook, or workflows change. That workflow uses the pull request code but has read-only repository permissions and does not request or use repository secrets.
 
@@ -223,6 +227,18 @@ Policy jobs have explicit five-minute timeouts, and the quality job has a ten-mi
 The `PR body policy` and `Commit message policy` status checks are required on `main`; otherwise CI would only detect and report violations.
 
 Online issue verification reflects the issue state when the workflow runs. If an issue is closed without another supported pull request event, rerun the workflow before relying on the previous result.
+
+## Amending a pull request commit
+
+Keep a pull request at one commit by amending instead of creating a follow-up commit:
+
+```sh
+git add <paths>
+git commit --amend
+git push --force-with-lease
+```
+
+Do not use `--no-verify` or otherwise bypass repository-managed hooks. Review the amended commit before pushing. `--force-with-lease` fails rather than overwriting remote work when the remote branch no longer matches the state known locally.
 
 ## Development
 

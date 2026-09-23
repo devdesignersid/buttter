@@ -119,28 +119,45 @@ fn run(records: &str) -> Output {
 }
 
 #[test]
-fn validates_every_pull_request_commit() {
-    let records = format!(
-        "{}{}{}",
-        record(
-            "1111111111111111111111111111111111111111",
-            "contributor",
-            "feat: first change"
-        ),
-        record(
-            "2222222222222222222222222222222222222222",
-            "contributor",
-            "fix(api): second change"
-        ),
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tcontributor\tdocs%3a%20third%20change\n"
-    );
+fn accepts_exactly_one_pull_request_commit() {
+    let records = "1111111111111111111111111111111111111111\tcontributor\tfeat%3a%20one%20change\n"
+        .to_owned();
     let output = run(&records);
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.stdout, b"Pull request commit messages are valid.\n");
+    assert_eq!(
+        output.stdout,
+        b"Pull request contains exactly one commit and its message is valid.\n"
+    );
+}
+
+#[test]
+fn reports_zero_and_multiple_commits_explicitly() {
+    let zero = run_with_count("", "0");
+    assert!(!zero.status.success());
+    assert!(String::from_utf8_lossy(&zero.stderr).contains("zero commits"));
+
+    let records = format!(
+        "{}{}",
+        record(
+            "2222222222222222222222222222222222222222",
+            "contributor",
+            "feat: first change",
+        ),
+        record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "dependabot[bot]",
+            "Bump a dependency",
+        ),
+    );
+    let multiple = run(&records);
+    assert!(!multiple.status.success());
+    let stderr = String::from_utf8_lossy(&multiple.stderr);
+    assert!(stderr.contains("2 commits"));
+    assert!(stderr.contains("exactly one"));
 }
 
 #[test]
@@ -154,21 +171,21 @@ fn reports_the_sha_for_each_invalid_commit() {
 }
 
 #[test]
-fn exempts_verified_github_bot_and_merge_commits() {
-    let records = format!(
-        "{}{}",
+fn exempts_a_verified_github_bot_or_merge_commit_message() {
+    for records in [
         record(
             "4444444444444444444444444444444444444444",
             "dependabot[bot]",
-            "Bump a dependency"
+            "Bump a dependency",
         ),
         record(
             "5555555555555555555555555555555555555555",
             "contributor",
-            "Merge branch 'main'"
-        )
-    );
-    assert!(run(&records).status.success());
+            "Merge branch 'main'",
+        ),
+    ] {
+        assert!(run(&records).status.success());
+    }
 }
 
 #[test]
@@ -249,13 +266,20 @@ fn fails_closed_for_api_and_commit_data_errors() {
         "contributor",
         "fix: valid message",
     );
-    for count in ["0", "invalid", "251", "2"] {
-        let output = run_with_count(&valid, count);
-        assert!(
-            !output.status.success(),
-            "count `{count}` unexpectedly passed"
-        );
-        assert!(String::from_utf8_lossy(&output.stderr).contains("commit data"));
+    let invalid_count = run_with_count(&valid, "invalid");
+    assert!(!invalid_count.status.success());
+    assert!(String::from_utf8_lossy(&invalid_count.stderr).contains("commit data"));
+
+    let over_limit = run_with_count(&valid, "251");
+    assert!(!over_limit.status.success());
+    let stderr = String::from_utf8_lossy(&over_limit.stderr);
+    assert!(stderr.contains("pagination"));
+    assert!(stderr.contains("250"));
+
+    for (records, count) in [(valid.as_str(), "2"), ("", "1")] {
+        let mismatch = run_with_count(records, count);
+        assert!(!mismatch.status.success());
+        assert!(String::from_utf8_lossy(&mismatch.stderr).contains("pagination"));
     }
 
     let duplicate = format!("{valid}{valid}");
