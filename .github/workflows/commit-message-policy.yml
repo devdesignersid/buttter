@@ -1,17 +1,16 @@
-name: Pull request body policy
+name: Commit message policy
 
 on:
   pull_request_target:
-    types: [opened, edited, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: read
-  issues: read
   pull-requests: read
 
 jobs:
   validate:
-    name: PR body policy
+    name: Commit message policy
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -27,13 +26,11 @@ jobs:
           tool: rust@1.98.1
           fallback: none
 
-      - name: Validate pull request body
+      - name: Validate pull request commits
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          printf '%s' "$PR_BODY" |
-            cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
-              validate-pr-body \
-                --github-repository "$GITHUB_REPOSITORY" \
-                --pull-request-number "${{ github.event.pull_request.number }}"
+          cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
+            validate-pr-commits \
+              --github-repository "$GITHUB_REPOSITORY" \
+              --pull-request-number "${{ github.event.pull_request.number }}"

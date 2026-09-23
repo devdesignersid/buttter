@@ -1,6 +1,6 @@
 # Repository Policy CLI
 
-`repo-policy` enforces the objective pull request body requirements defined by this repository. It gives contributors immediate local diagnostics and gives CI a deterministic pass-or-fail result.
+`repo-policy` enforces the objective pull request body and commit-message requirements defined by this repository. It gives contributors immediate local diagnostics and gives CI a deterministic pass-or-fail result.
 
 The tool does not judge subjective requirements such as readability, design quality, appropriate scope, or whether evidence is truthful. Those requirements still need human review.
 
@@ -44,13 +44,53 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
     path/to/body.md
 ```
 
+Validate a commit-message file, as the repository-managed `commit-msg` hook does:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  validate-commit-message path/to/COMMIT_EDITMSG
+```
+
+Omit the path to read a message from standard input. Validate every commit in a pull request through the authenticated GitHub CLI:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  validate-pr-commits \
+    --github-repository devdesignersid/buttter \
+    --pull-request-number 10
+```
+
 Print built-in help:
 
 ```sh
 cargo run --manifest-path tools/repo-policy/Cargo.toml -- --help
 ```
 
-A successful invocation writes `Pull request body is valid.` and exits with status 0. Invalid arguments, unreadable or non-UTF-8 input, policy violations, GitHub CLI failures, API failures, and invalid issue states produce diagnostics on standard error and exit with status 1.
+A successful invocation identifies the policy that passed and exits with status 0. Invalid arguments, unreadable or non-UTF-8 input, policy violations, GitHub CLI failures, API failures, and malformed GitHub data produce diagnostics on standard error and exit with status 1.
+
+## Commit-message contract
+
+Messages use this Conventional Commits 1.0.0 grammar:
+
+```text
+<type>[(scope)][!]: <description>
+
+[optional body]
+
+[optional trailers]
+```
+
+The allowed types are `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `style`, and `test`. Extending this list is a repository policy change. A scope is non-empty text inside one pair of parentheses and cannot contain parentheses or control characters. A non-empty description follows a colon and space. `!` immediately before the colon marks a breaking change.
+
+A body is free-form UTF-8 text separated from the subject by a blank line. LF and CRLF line endings are accepted; bare carriage returns are rejected.
+
+A trailing footer paragraph uses Git-style trailers. Each trailer starts with an alphanumeric-or-hyphen token and uses `Token: value` or `Token #value`; indented lines continue the preceding trailer. `BREAKING CHANGE: description` and `BREAKING-CHANGE: description` are accepted. Trailer values cannot be empty.
+
+Subjects beginning with `Merge ` are exempt as Git-generated merge messages. Reverts otherwise use the normal grammar, such as `revert: restore previous behavior`; legacy `Revert "..."` subjects are not exempt.
+
+The `.githooks/commit-msg` hook passes Git's message file to `validate-commit-message`. Configure clones with `git config core.hooksPath .githooks`, as required by `AGENTS.md`.
+
+`validate-pr-commits` requests every pull-request commit with pagination and verifies the unique record count against pull-request metadata. GitHub API version `2022-11-28` limits this endpoint to 250 commits, so larger pull requests fail closed. A commit is exempt when GitHub attributes it to a non-empty login ending in `[bot]`. Names or email addresses embedded in Git commit metadata do not establish that exemption. Missing or duplicate commits, malformed records, invalid encoding, API errors, and nonconforming non-bot messages fail closed; diagnostics identify the rejected commit SHA.
 
 ## Enforced body contract
 
@@ -172,11 +212,15 @@ Provide one or more non-empty bullet items. Use `- None` when nothing remains un
 
 The workflow uses `pull_request_target`, checks out the pull request's base commit, and executes only trusted policy code from that commit. It does not check out or execute code from the pull request. Its token has only `contents: read`, `issues: read`, and `pull-requests: read` permissions. The pull request body is passed as data through an environment variable rather than evaluated as shell code.
 
-`.github/workflows/repo-policy-quality.yml` runs formatting, Clippy, tests, and the 100% line-coverage gate when the policy tool or its workflows change. That workflow uses the pull request code but has read-only repository permissions and does not request or use repository secrets.
+`.github/workflows/commit-message-policy.yml` also uses `pull_request_target` and trusted policy code from the pull request's base commit. It reads paginated commit metadata through the GitHub API and never checks out or executes pull-request code. Its token has only `contents: read` and `pull-requests: read` permissions.
+
+`.github/workflows/repo-policy-quality.yml` runs formatting, Clippy, tests, and the 100% line-coverage gate when the policy tool, commit hook, or workflows change. That workflow uses the pull request code but has read-only repository permissions and does not request or use repository secrets.
+
+Policy jobs have explicit five-minute timeouts, and the quality job has a ten-minute timeout. These bounds fail closed on hangs while leaving substantial margin over observed execution times.
 
 ### Server-side enforcement
 
-The `PR body policy` status check is required by the active `Require pull request body policy on main` GitHub ruleset; otherwise CI would only detect and report violations.
+The `PR body policy` and `Commit message policy` status checks are required on `main`; otherwise CI would only detect and report violations.
 
 Online issue verification reflects the issue state when the workflow runs. If an issue is closed without another supported pull request event, rerun the workflow before relying on the previous result.
 
@@ -199,14 +243,14 @@ cargo install cargo-llvm-cov --version 0.9.1 --locked
 
 ## Maintaining the policy
 
-When the pull request or work-item contract changes:
+When a pull request, work-item, or commit-message contract changes:
 
-1. Update `.github/pull_request_template.md` or `.github/ISSUE_TEMPLATE/work-item.yml` as applicable.
+1. Update the applicable template, hook, workflow, or grammar documentation.
 2. Add or change tests under `tools/repo-policy/tests` and confirm they fail for the expected reason.
 3. Make the minimum validator change in `tools/repo-policy/src/main.rs`.
 4. Update this document and built-in help when commands or behavior change.
 5. Run all development quality gates, including 100% line coverage.
 6. Review workflow permissions and the trusted-code boundary if CI behavior changes.
-7. Confirm the GitHub ruleset still requires the `PR body policy` check.
+7. Confirm the GitHub ruleset still requires both policy checks.
 
 Keep template requirements, validator behavior, tests, and documentation in the same independently deployable change so they cannot drift silently. Changes to `APPROVAL_LABEL` or `AUTHORIZED_APPROVERS` in `src/main.rs` are policy changes and require the same review.
