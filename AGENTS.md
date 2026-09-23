@@ -42,6 +42,15 @@ These instructions apply to the entire repository.
 - Require 100% line coverage for repository-authored product code. Test code, generated code, and third-party source are excluded from this requirement.
 - Do not claim completion unless all tests and the applicable coverage gate pass.
 
+### Mutation Testing
+
+- Require merge-blocking mutation testing of affected product modules when a pull request changes repository-authored product logic, its tests, or configuration that can change product behavior.
+- Require every viable mutant to be killed before merge.
+- Do not mutate test code, generated code, or third-party source.
+- Require evidence and explicit human approval for every mutant classified as equivalent or unsupported.
+- Require periodic full-workspace mutation testing. Determine its cadence from measured runtime before enabling the scheduled workflow.
+- Before adopting a mutation-testing tool, use a minimal proof of concept to verify that its pinned version supports the pinned Rust toolchain, affected-module selection, deterministic execution, timeouts, compile failures, exclusions, and machine-readable results.
+
 ## Implementation
 
 - Prefer executable quality gates over prose standards.
