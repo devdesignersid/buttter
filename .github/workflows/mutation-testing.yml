@@ -1,0 +1,77 @@
+name: Mutation testing proof of concept
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Mutation testing benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: rust@1.98.1
+          fallback: none
+
+      - name: Install pinned mutation tool
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-mutants@27.1.0
+          fallback: none
+
+      - name: Benchmark issue 14 mutation scope
+        working-directory: tools/repo-policy
+        shell: bash
+        run: |
+          results="$RUNNER_TEMP/mutation-results"
+          start=$(date +%s)
+          set +e
+          cargo mutants \
+            --in-place \
+            --no-shuffle \
+            --no-times \
+            --timeout 15 \
+            --build-timeout 30 \
+            --output "$results" \
+            --file src/main.rs \
+            --re 'validate_(body|bullet_list|labeled_lines)' \
+            -- \
+            --test pr_body
+          status=$?
+          set -e
+          elapsed=$(($(date +%s) - start))
+          printf '%s\n' "$elapsed" > "$results/mutation-elapsed-seconds.txt"
+          printf 'Mutation command elapsed time: %s seconds.\n' "$elapsed" >> "$GITHUB_STEP_SUMMARY"
+          if (( elapsed <= 120 )); then
+            printf 'Two-minute target: PASS.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Two-minute target: MISS.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      - name: Upload machine-readable mutation results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-testing-poc
+          path: ${{ runner.temp }}/mutation-results
+          if-no-files-found: error
+          retention-days: 7
+
+  timeout-verification:
+    name: Five-minute timeout verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Exceed the job timeout deliberately
+        run: sleep 360
