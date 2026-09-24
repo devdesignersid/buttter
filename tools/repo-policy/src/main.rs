@@ -4,7 +4,9 @@ use std::fs;
 use std::io::{self, Read};
 use std::process::{self, Command};
 
-const USAGE: &str = "Repository policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n  repo-policy validate-commit-message [MESSAGE_FILE]\n  repo-policy validate-pr-commits --github-repository OWNER/REPO --pull-request-number NUMBER\n\nCommands:\n  validate-pr-body         Validate the required pull request body and linked work item.\n  validate-commit-message  Validate one Conventional Commit message.\n  validate-pr-commits      Require one pull-request commit and validate its message.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify repository data.\n  --pull-request-number NUMBER\n      Select the pull request to verify.\n  -h, --help\n      Print this help.\n\nInput:\n  File commands read the supplied file or standard input when no file is supplied.\n\nExit status:\n  0  The selected policy passed.\n  1  Arguments, input, policy, or GitHub verification failed.";
+use sha2::{Digest, Sha256};
+
+const USAGE: &str = "Repository policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n  repo-policy validate-commit-message [MESSAGE_FILE]\n  repo-policy validate-pr-commits --github-repository OWNER/REPO --pull-request-number NUMBER\n  repo-policy validate-pr-file-scope --github-repository OWNER/REPO --pull-request-number NUMBER\n\nCommands:\n  validate-pr-body         Validate the required pull request body and linked work item.\n  validate-commit-message  Validate one Conventional Commit message.\n  validate-pr-commits      Require one pull-request commit and validate its message.\n  validate-pr-file-scope   Reject pull-request files outside approved work-item scope.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify repository data.\n  --pull-request-number NUMBER\n      Select the pull request to verify.\n  -h, --help\n      Print this help.\n\nInput:\n  File commands read the supplied file or standard input when no file is supplied.\n\nExit status:\n  0  The selected policy passed.\n  1  Arguments, input, policy, or GitHub verification failed.";
 
 const COMMIT_TYPES: [&str; 11] = [
     "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
@@ -68,6 +70,7 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         "validate-pr-body" => run_validate_pr_body(command_arguments),
         "validate-commit-message" => run_validate_commit_message(command_arguments),
         "validate-pr-commits" => run_validate_pr_commits(command_arguments),
+        "validate-pr-file-scope" => run_validate_pr_file_scope(command_arguments),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -164,6 +167,91 @@ fn run_validate_pr_commits(command_arguments: &[String]) -> Result<(), String> {
     }
 
     println!("Pull request contains exactly one commit and its message is valid.");
+    Ok(())
+}
+
+fn run_validate_pr_file_scope(command_arguments: &[String]) -> Result<(), String> {
+    let (repository, pull_request_number) = parse_pr_commit_arguments(command_arguments)?;
+    let pull_endpoint = format!("repos/{repository}/pulls/{pull_request_number}");
+    let pull_body = github_api(
+        &pull_endpoint,
+        ".body",
+        false,
+        &format!("pull request #{pull_request_number} body"),
+    )?;
+    let validated = validate_body(&pull_body).map_err(|violations| {
+        format!(
+            "Pull request body policy violations:\n- {}",
+            violations.join("\n- ")
+        )
+    })?;
+    verify_open_issue(&repository, validated.issue_number)?;
+
+    let issue_endpoint = format!("repos/{repository}/issues/{}", validated.issue_number);
+    let issue_body = github_api(
+        &issue_endpoint,
+        ".body",
+        false,
+        &format!("work item #{}", validated.issue_number),
+    )?;
+    validate_work_item(&issue_body).map_err(|violations| {
+        format!(
+            "Linked work-item policy violations:\n- {}",
+            violations.join("\n- ")
+        )
+    })?;
+    let approved_paths = parse_approved_paths(&issue_body)?;
+
+    let pull_created_at = github_api(
+        &pull_endpoint,
+        ".created_at",
+        false,
+        &format!("pull request #{pull_request_number} creation time"),
+    )?;
+    let pull_created_at = Timestamp::parse(pull_created_at.trim())
+        .ok_or_else(|| "GitHub API returned a malformed pull request timestamp".to_owned())?;
+    verify_scope_approval(
+        &repository,
+        validated.issue_number,
+        &approved_paths,
+        pull_created_at,
+    )?;
+
+    let changed_file_count = github_api(
+        &pull_endpoint,
+        r#".changed_files | if type == "number" then . else error("malformed changed-file count") end"#,
+        false,
+        &format!("pull request #{pull_request_number} changed-file count"),
+    )?;
+    let changed_file_count = changed_file_count
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| "GitHub file data contained an invalid changed-file count".to_owned())?;
+    if changed_file_count > 3_000 {
+        return Err(
+            "GitHub file data exceeds the pull-request files endpoint's 3,000-file pagination limit"
+                .to_owned(),
+        );
+    }
+
+    let files_endpoint = format!("{pull_endpoint}/files");
+    let query = r#".[] | if (((.status | type) == "string") and ((.filename | type) == "string") and ((.previous_filename == null) or ((.previous_filename | type) == "string"))) then [(.status | @uri), (.filename | @uri), ((.previous_filename // "") | @uri)] | join("\t") else error("malformed file data") end"#;
+    let response = github_api(
+        &files_endpoint,
+        query,
+        true,
+        &format!("pull request #{pull_request_number} file data"),
+    )?;
+    let changed_files = parse_changed_files(&response)?;
+    if changed_files.len() != changed_file_count {
+        return Err(format!(
+            "GitHub file data pagination mismatch: the file list returned {} unique files; pull-request metadata reported {changed_file_count}",
+            changed_files.len()
+        ));
+    }
+    enforce_approved_paths(&approved_paths, &changed_files)?;
+
+    println!("Pull request file scope is valid.");
     Ok(())
 }
 
@@ -290,19 +378,29 @@ fn parse_commit_records(response: &str) -> Result<Vec<CommitRecord>, String> {
 }
 
 fn percent_decode(value: &str) -> Result<String, String> {
+    percent_decode_for(value, "commit")
+}
+
+fn percent_decode_for(value: &str, subject: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
             let Some(encoded) = bytes.get(index + 1..index + 3) else {
-                return Err("GitHub commit data contained invalid percent encoding".to_owned());
+                return Err(format!(
+                    "GitHub {subject} data contained invalid percent encoding"
+                ));
             };
             let Some(high) = hex_value(encoded[0]) else {
-                return Err("GitHub commit data contained invalid percent encoding".to_owned());
+                return Err(format!(
+                    "GitHub {subject} data contained invalid percent encoding"
+                ));
             };
             let Some(low) = hex_value(encoded[1]) else {
-                return Err("GitHub commit data contained invalid percent encoding".to_owned());
+                return Err(format!(
+                    "GitHub {subject} data contained invalid percent encoding"
+                ));
             };
             decoded.push(high * 16 + low);
             index += 3;
@@ -311,7 +409,7 @@ fn percent_decode(value: &str) -> Result<String, String> {
             index += 1;
         }
     }
-    String::from_utf8(decoded).map_err(|_| "GitHub commit data contained invalid UTF-8".to_owned())
+    String::from_utf8(decoded).map_err(|_| format!("GitHub {subject} data contained invalid UTF-8"))
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -327,6 +425,408 @@ fn is_verified_bot(author: &str) -> bool {
     author
         .strip_suffix("[bot]")
         .is_some_and(|name| !name.is_empty())
+}
+
+fn parse_approved_paths(issue_body: &str) -> Result<Vec<String>, String> {
+    const START: &str = "<!-- approved-paths:start -->";
+    const END: &str = "<!-- approved-paths:end -->";
+    let issue_body = issue_body.replace("\r\n", "\n");
+    if issue_body.matches(START).count() != 1 || issue_body.matches(END).count() != 1 {
+        return Err("work item must contain exactly one pair of approved-paths markers".to_owned());
+    }
+    let start = issue_body
+        .find(START)
+        .expect("validated start marker must exist")
+        + START.len();
+    let end = issue_body
+        .find(END)
+        .expect("validated end marker must exist");
+    if start >= end {
+        return Err("approved-paths markers must occur in start-to-end order".to_owned());
+    }
+    let declaration = issue_body[start..end].trim();
+    let Some(json) = declaration
+        .strip_prefix("```json\n")
+        .and_then(|value| value.strip_suffix("\n```"))
+    else {
+        return Err("approved paths must use one JSON fenced block between the markers".to_owned());
+    };
+    let paths = JsonStringArrayParser::parse(json).map_err(|detail| {
+        format!("approved paths must be a valid JSON array of strings: {detail}")
+    })?;
+    if paths.is_empty() {
+        return Err("approved paths must contain one or more exact file paths".to_owned());
+    }
+
+    let mut previous: Option<&str> = None;
+    for path in &paths {
+        validate_approved_path(path)?;
+        if previous == Some(path) {
+            return Err(format!("approved paths contain duplicate path `{path}`"));
+        }
+        if previous.is_some_and(|value| value > path.as_str()) {
+            return Err("approved paths must be sorted in ascending byte order".to_owned());
+        }
+        previous = Some(path);
+    }
+    Ok(paths)
+}
+
+fn validate_approved_path(path: &str) -> Result<(), String> {
+    if path.contains(['*', '?', '[', ']']) {
+        return Err(format!("approved path `{path}` contains glob syntax"));
+    }
+    if path.is_empty() || path.starts_with('/') || path.contains('\0') {
+        return Err(format!(
+            "approved path `{path}` must be a non-empty repository-relative path without NUL"
+        ));
+    }
+    if path.ends_with('/') {
+        return Err(format!(
+            "approved path `{path}` must identify one exact file path"
+        ));
+    }
+    if path
+        .split('/')
+        .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(format!(
+            "approved path `{path}` must be a normalized repository-relative path"
+        ));
+    }
+    Ok(())
+}
+
+struct JsonStringArrayParser<'a> {
+    input: &'a str,
+    index: usize,
+}
+
+impl<'a> JsonStringArrayParser<'a> {
+    fn parse(input: &'a str) -> Result<Vec<String>, String> {
+        let mut parser = Self { input, index: 0 };
+        parser.skip_whitespace();
+        parser.expect('[')?;
+        parser.skip_whitespace();
+        let mut values = Vec::new();
+        if parser.consume(']') {
+            parser.finish()?;
+            return Ok(values);
+        }
+        loop {
+            values.push(parser.string()?);
+            parser.skip_whitespace();
+            if parser.consume(']') {
+                parser.finish()?;
+                return Ok(values);
+            }
+            parser.expect(',')?;
+            parser.skip_whitespace();
+        }
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        self.expect('"')?;
+        let mut value = String::new();
+        loop {
+            let character = self
+                .next()
+                .ok_or_else(|| "unterminated string".to_owned())?;
+            match character {
+                '"' => return Ok(value),
+                '\\' => self.escape(&mut value)?,
+                character if character.is_control() => {
+                    return Err("string contains an unescaped control character".to_owned());
+                }
+                character => value.push(character),
+            }
+        }
+    }
+
+    fn escape(&mut self, value: &mut String) -> Result<(), String> {
+        match self.next().ok_or_else(|| "incomplete escape".to_owned())? {
+            '"' => value.push('"'),
+            '\\' => value.push('\\'),
+            '/' => value.push('/'),
+            'b' => value.push('\u{0008}'),
+            'f' => value.push('\u{000c}'),
+            'n' => value.push('\n'),
+            'r' => value.push('\r'),
+            't' => value.push('\t'),
+            'u' => {
+                let first = self.hex_quad()?;
+                let scalar = if (0xd800..=0xdbff).contains(&first) {
+                    if self.next() != Some('\\') || self.next() != Some('u') {
+                        return Err("high surrogate is not followed by a low surrogate".to_owned());
+                    }
+                    let second = self.hex_quad()?;
+                    if !(0xdc00..=0xdfff).contains(&second) {
+                        return Err("surrogate pair contains an invalid low surrogate".to_owned());
+                    }
+                    0x10000 + ((u32::from(first) - 0xd800) << 10) + u32::from(second) - 0xdc00
+                } else if (0xdc00..=0xdfff).contains(&first) {
+                    return Err("low surrogate has no preceding high surrogate".to_owned());
+                } else {
+                    u32::from(first)
+                };
+                value.push(char::from_u32(scalar).expect("validated JSON scalar must be valid"));
+            }
+            _ => return Err("unsupported string escape".to_owned()),
+        }
+        Ok(())
+    }
+
+    fn hex_quad(&mut self) -> Result<u16, String> {
+        let mut value = 0_u16;
+        for _ in 0..4 {
+            let character = self
+                .next()
+                .ok_or_else(|| "incomplete Unicode escape".to_owned())?;
+            let digit = character
+                .to_digit(16)
+                .filter(|_| character.is_ascii())
+                .ok_or_else(|| "invalid Unicode escape".to_owned())?;
+            value = value * 16 + u16::try_from(digit).expect("hex digit fits in u16");
+        }
+        Ok(value)
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        self.skip_whitespace();
+        (self.index == self.input.len())
+            .then_some(())
+            .ok_or_else(|| "unexpected content after array".to_owned())
+    }
+
+    fn expect(&mut self, expected: char) -> Result<(), String> {
+        if self.consume(expected) {
+            Ok(())
+        } else {
+            Err(format!("expected `{expected}`"))
+        }
+    }
+
+    fn consume(&mut self, expected: char) -> bool {
+        if self.input[self.index..].starts_with(expected) {
+            self.index += expected.len_utf8();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn next(&mut self) -> Option<char> {
+        let character = self.input[self.index..].chars().next()?;
+        self.index += character.len_utf8();
+        Some(character)
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self
+            .input
+            .as_bytes()
+            .get(self.index)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
+        {
+            self.index += 1;
+        }
+    }
+}
+
+fn approved_paths_digest(paths: &[String]) -> String {
+    let mut digest = Sha256::new();
+    for path in paths {
+        digest.update(path.len().to_string());
+        digest.update(":");
+        digest.update(path.as_bytes());
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+struct ScopeApproval {
+    id: u64,
+    actor: String,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    digest: String,
+}
+
+fn verify_scope_approval(
+    repository: &str,
+    issue_number: u64,
+    paths: &[String],
+    pull_created_at: Timestamp,
+) -> Result<(), String> {
+    let endpoint = format!("repos/{repository}/issues/{issue_number}/comments");
+    let query = r#".[] | if (((.id | type) == "number") and ((.user.login | type) == "string") and ((.created_at | type) == "string") and ((.updated_at | type) == "string") and ((.body | type) == "string")) then [(.id | tostring), (.user.login | @uri), (.created_at | @uri), (.updated_at | @uri), (.body | @uri)] | join("\t") else error("malformed comment data") end"#;
+    let response = github_api(
+        &endpoint,
+        query,
+        true,
+        &format!("scope approval comments for issue #{issue_number}"),
+    )?;
+    let approval = parse_latest_scope_approval(&response)?;
+    if !AUTHORIZED_APPROVERS
+        .iter()
+        .any(|approver| approval.actor.eq_ignore_ascii_case(approver))
+    {
+        return Err(format!(
+            "GitHub identity `{}` is not authorized to approve file scope",
+            approval.actor
+        ));
+    }
+    if approval.created_at >= pull_created_at {
+        return Err("scope approval timestamp must predate pull request creation".to_owned());
+    }
+    if approval.updated_at >= pull_created_at {
+        return Err(
+            "scope approval update timestamp must predate pull request creation".to_owned(),
+        );
+    }
+    let expected = approved_paths_digest(paths);
+    if approval.digest != expected {
+        return Err(format!(
+            "scope approval digest does not match the current approved paths; expected `{expected}`"
+        ));
+    }
+    Ok(())
+}
+
+fn parse_latest_scope_approval(response: &str) -> Result<ScopeApproval, String> {
+    let mut approvals = Vec::new();
+    let mut ids = HashSet::new();
+    for line in response.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [id, actor, created_at, updated_at, body] = fields.as_slice() else {
+            return Err("GitHub scope approval data contained a malformed record".to_owned());
+        };
+        let id = id
+            .parse::<u64>()
+            .map_err(|_| "GitHub scope approval data contained an invalid comment ID".to_owned())?;
+        if !ids.insert(id) {
+            return Err(format!(
+                "GitHub scope approval data contained duplicate comment ID `{id}`"
+            ));
+        }
+        let actor = percent_decode_for(actor, "scope approval")?;
+        let created_at = percent_decode_for(created_at, "scope approval")?;
+        let updated_at = percent_decode_for(updated_at, "scope approval")?;
+        let body = percent_decode_for(body, "scope approval")?;
+        if !body.starts_with("scope-approved") {
+            continue;
+        }
+        let Some(digest) = body.strip_prefix("scope-approved sha256:") else {
+            return Err(
+                "GitHub scope approval data contained a malformed scope approval".to_owned(),
+            );
+        };
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(
+                "GitHub scope approval data contained a malformed scope approval".to_owned(),
+            );
+        }
+        let created_at = Timestamp::parse(&created_at)
+            .ok_or_else(|| "GitHub scope approval timestamp is malformed".to_owned())?;
+        let updated_at = Timestamp::parse(&updated_at)
+            .ok_or_else(|| "GitHub scope approval update timestamp is malformed".to_owned())?;
+        if actor.is_empty() {
+            return Err("GitHub scope approval data contained a malformed actor".to_owned());
+        }
+        approvals.push(ScopeApproval {
+            id,
+            actor,
+            created_at,
+            updated_at,
+            digest: digest.to_owned(),
+        });
+    }
+    approvals
+        .into_iter()
+        .max_by_key(|approval| approval.id)
+        .ok_or_else(|| "GitHub scope approval data contains no scope approval".to_owned())
+}
+
+struct ChangedFile {
+    status: String,
+    path: String,
+    previous_path: Option<String>,
+}
+
+fn parse_changed_files(response: &str) -> Result<Vec<ChangedFile>, String> {
+    let mut files = Vec::new();
+    let mut seen_paths = HashSet::new();
+    for line in response.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [status, path, previous_path] = fields.as_slice() else {
+            return Err("GitHub file data contained a malformed record".to_owned());
+        };
+        let status = percent_decode_for(status, "file")?;
+        let path = percent_decode_for(path, "file")?;
+        let previous_path = percent_decode_for(previous_path, "file")?;
+        if path.is_empty() {
+            return Err("GitHub file data contained an empty path".to_owned());
+        }
+        if !seen_paths.insert(path.clone()) {
+            return Err(format!(
+                "GitHub file data contained duplicate path `{path}`"
+            ));
+        }
+        let previous_path = match status.as_str() {
+            "renamed" | "copied" if previous_path.is_empty() => {
+                return Err(format!(
+                    "GitHub file data for `{status}` status omitted the previous path"
+                ));
+            }
+            "renamed" | "copied" => Some(previous_path),
+            "added" | "modified" | "removed" | "changed" | "unchanged"
+                if previous_path.is_empty() =>
+            {
+                None
+            }
+            "added" | "modified" | "removed" | "changed" | "unchanged" => {
+                return Err(format!(
+                    "GitHub file data for `{status}` status unexpectedly included a previous path"
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "GitHub file data contained unknown status `{status}`"
+                ));
+            }
+        };
+        files.push(ChangedFile {
+            status,
+            path,
+            previous_path,
+        });
+    }
+    Ok(files)
+}
+
+fn enforce_approved_paths(
+    approved_paths: &[String],
+    changed_files: &[ChangedFile],
+) -> Result<(), String> {
+    let approved: HashSet<&str> = approved_paths.iter().map(String::as_str).collect();
+    for file in changed_files {
+        for path in std::iter::once(file.path.as_str()).chain(file.previous_path.as_deref()) {
+            if !approved.contains(path) {
+                return Err(format!(
+                    "`{path}` from `{}` file data is outside approved scope",
+                    file.status
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_commit_message(message: &str) -> Result<(), String> {

@@ -4,6 +4,8 @@
 
 The tool does not judge subjective requirements such as readability, design quality, appropriate scope, or whether evidence is truthful. Those requirements still need human review.
 
+The pinned `sha2` 0.10.9 crate supplies the SHA-256 implementation. Its fixed-input `Digest::update` and `Digest::finalize` API is infallible; input and GitHub failures are handled before hashing. No optional assembly feature is enabled.
+
 ## Prerequisites
 
 - Rust and Cargo with Rust 2024 edition support. CI uses Rust 1.98.1.
@@ -60,6 +62,15 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
     --pull-request-number 10
 ```
 
+Validate the pull request's complete approved file scope:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  validate-pr-file-scope \
+    --github-repository devdesignersid/buttter \
+    --pull-request-number 10
+```
+
 Print built-in help:
 
 ```sh
@@ -67,6 +78,57 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- --help
 ```
 
 A successful invocation identifies the policy that passed and exits with status 0. Invalid arguments, unreadable or non-UTF-8 input, policy violations, GitHub CLI failures, API failures, and malformed GitHub data produce diagnostics on standard error and exit with status 1.
+
+## Approved-file-scope contract
+
+The work item's `Review scope` section must contain exactly one declaration in this form:
+
+````md
+<!-- approved-paths:start -->
+```json
+[
+  ".github/workflows/example.yml",
+  "Cargo.lock",
+  "src/example.rs"
+]
+```
+<!-- approved-paths:end -->
+````
+
+The JSON array must contain one or more unique, exact repository-relative UTF-8 file paths in ascending byte order. Paths cannot be empty or absolute, end in `/`, contain NUL, use empty, `.` or `..` components, or contain the glob metacharacters `*`, `?`, `[` or `]`. Directory and glob patterns are not supported. Dotfiles and generated files receive no implicit coverage and must be listed explicitly.
+
+The canonical digest input preserves declaration order. For each decoded path, append its UTF-8 byte length in decimal, one colon, and its UTF-8 bytes, with no separator between entries. SHA-256 of that byte sequence is the scope digest. This script prints the digest for an issue body saved as `issue.md`:
+
+```sh
+python3 - <<'PY'
+import hashlib
+import json
+from pathlib import Path
+
+body = Path("issue.md").read_text()
+start = body.index("<!-- approved-paths:start -->")
+end = body.index("<!-- approved-paths:end -->")
+block = body[start + len("<!-- approved-paths:start -->"):end].strip()
+paths = json.loads(block.removeprefix("```json\n").removesuffix("\n```"))
+digest = hashlib.sha256()
+for path in paths:
+    encoded = path.encode("utf-8")
+    digest.update(str(len(encoded)).encode("ascii") + b":" + encoded)
+print(digest.hexdigest())
+PY
+```
+
+Before creating the pull request, `devdesignersid` must post an issue comment containing exactly:
+
+```text
+scope-approved sha256:<64-lowercase-hex-digest>
+```
+
+The latest surviving comment whose body starts with `scope-approved` controls. Its author must be authorized; its creation and latest-update timestamps must both strictly predate pull-request creation; and its digest must match the current declaration. Missing, malformed, deleted, unauthorized, stale, edited after pull-request creation, or post-PR approval records fail closed.
+
+`validate-pr-file-scope` obtains the linked issue from the validated pull request body. It verifies that the issue is open and structurally complete, then reads the declaration, approval comments, pull-request metadata, and paginated pull-request file list through GitHub API version `2022-11-28`. Additions, modifications, deletions, and the `changed` and `unchanged` statuses require the current path to be approved. Renames and copies require both current and previous paths. An empty diff passes when the declaration and approval are valid. Duplicate or malformed file records, changed-file count mismatches, more than the endpoint's 3,000-file limit, invalid encoding, unknown statuses, pagination failures, authentication failures, API failures, and GitHub CLI failures fail closed.
+
+Scope expansion requires a new work-item declaration and a new digest-bound approval, followed by a new pull request. Do not update or reuse the old pull request. Because GitHub does not emit a pull-request event for every linked-issue state change, rerun the check before relying on an earlier result if issue data may have changed.
 
 ## Commit-message contract
 
@@ -218,13 +280,15 @@ The workflow uses `pull_request_target`, checks out the pull request's base comm
 
 The workflow uses `pull_request_target` and trusted policy code from the pull request's base commit. It reads the paginated commit list and pull-request metadata through the GitHub API and never checks out or executes pull-request code. Its token has only `contents: read` and `pull-requests: read` permissions.
 
-`.github/workflows/repo-policy-quality.yml` runs formatting, Clippy, tests, and the 100% line-coverage gate when the policy tool, commit hook, or workflows change. That workflow uses the pull request code but has read-only repository permissions and does not request or use repository secrets.
+`.github/workflows/file-scope-policy.yml` runs for pull request creation, edits, reopening, commit synchronization, and transitions to ready for review. It checks out and executes only policy code from the pull request's base commit. It treats pull-request and issue content as data, never checks out or executes pull-request code, and has only `contents: read`, `issues: read`, and `pull-requests: read` permissions.
+
+`.github/workflows/repo-policy-quality.yml` runs formatting, Clippy, tests, and the 100% line-coverage gate when the issue template, policy tool, commit hook, or policy workflows change. That workflow uses the pull request code but has read-only repository permissions and does not request or use repository secrets.
 
 Policy jobs have explicit five-minute timeouts, and the quality job has a ten-minute timeout. These bounds fail closed on hangs while leaving substantial margin over observed execution times.
 
 ### Server-side enforcement
 
-The `PR body policy` and `Commit message policy` status checks are required on `main`; otherwise CI would only detect and report violations.
+The `PR body policy`, `Commit message policy`, and `File scope policy` status checks are required on `main`; otherwise CI would only detect and report violations.
 
 Online issue verification reflects the issue state when the workflow runs. If an issue is closed without another supported pull request event, rerun the workflow before relying on the previous result.
 

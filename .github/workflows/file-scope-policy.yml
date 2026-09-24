@@ -1,0 +1,37 @@
+name: Pull request file scope policy
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: File scope policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out trusted policy code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: rust@1.98.1
+          fallback: none
+
+      - name: Validate approved file scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
+            validate-pr-file-scope \
+              --github-repository "$GITHUB_REPOSITORY" \
+              --pull-request-number "${{ github.event.pull_request.number }}"

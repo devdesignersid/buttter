@@ -20,6 +20,10 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- validate-pr-body path/
 
 CI additionally verifies that the related `Closes #N` reference identifies an open, structurally complete work item. The work item must have a current `implementation-approved` label applied by `devdesignersid` before the pull request was created. The `PR body policy` check is required on `main`, so a ready-for-review pull request cannot merge when validation fails.
 
+Each work item must also declare its approved files as a sorted JSON array of exact repository-relative paths between the `approved-paths` markers supplied by the issue template. Dotfiles and generated files require explicit entries; glob and directory patterns are rejected. An authorized `scope-approved sha256:<digest>` comment must bind that declaration before the pull request is created. The trusted `File scope policy` check compares every base-to-head changed path with the declaration and must be required on `main`.
+
+Scope expansion invalidates the existing approval and pull request. Update the work item, obtain a new digest-bound approval, and create a new pull request; do not reuse the old pull request. See the [Repository Policy CLI documentation](tools/repo-policy/README.md#approved-file-scope-contract) for the format and digest procedure.
+
 Commit messages must follow the repository's documented Conventional Commits grammar. The repository-managed `commit-msg` hook validates local commits. Validate a message directly with:
 
 ```sh
