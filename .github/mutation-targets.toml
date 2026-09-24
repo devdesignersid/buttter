@@ -1,0 +1,50 @@
+version = 1
+behavior_paths = [
+  ".github/mutation-targets.toml",
+  ".github/quality-targets.toml",
+  ".github/workflows/mutation-testing.yml",
+  "tools/repo-policy/Cargo.toml",
+]
+
+[[groups]]
+name = "mutation-cli"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/main.rs"
+function_regex = "^run$"
+test_paths = []
+behavior_paths = []
+test_target = "mutation_plan"
+
+[[groups]]
+name = "mutation-planner"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/quality.rs"
+function_regex = "^(mutation_plan|validate_mutation_results|load_mutation_manifest|validate_mutation_manifest|validate_sorted_paths|require_regular_file|valid_identifier|read_changed_paths|plan_mutations|mutation_file|validate_outcomes)$"
+test_paths = ["tools/repo-policy/tests/mutation_plan.rs"]
+behavior_paths = [
+  ".github/mutation-targets.toml",
+  ".github/workflows/mutation-testing.yml",
+  "tools/repo-policy/Cargo.toml",
+]
+test_target = "mutation_plan"
+
+[[groups]]
+name = "pr-body"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/main.rs"
+function_regex = "^validate_body$"
+test_paths = ["tools/repo-policy/tests/pr_body.rs"]
+behavior_paths = []
+test_target = "pr_body"
+
+[[groups]]
+name = "quality"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/quality.rs"
+function_regex = "^(find_target|validate_structure)$"
+test_paths = [
+  "tools/repo-policy/tests/quality_manifest.rs",
+  "tools/repo-policy/tests/quality_workflow.rs",
+]
+behavior_paths = [".github/quality-targets.toml"]
+test_target = "quality_manifest"

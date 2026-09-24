@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 mod quality;
 
-const USAGE: &str = "Repository policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n  repo-policy validate-commit-message [MESSAGE_FILE]\n  repo-policy validate-pr-commits --github-repository OWNER/REPO --pull-request-number NUMBER\n  repo-policy validate-pr-file-scope --github-repository OWNER/REPO --pull-request-number NUMBER\n  repo-policy validate-quality-manifest MANIFEST [--repository-root PATH]\n  repo-policy quality-matrix MANIFEST [--repository-root PATH]\n  repo-policy validate-coverage-report MANIFEST TARGET REPORT [--repository-root PATH]\n  repo-policy run-quality-target MANIFEST TARGET [--repository-root PATH]\n\nCommands:\n  validate-pr-body          Validate the required pull request body and linked work item.\n  validate-commit-message   Validate one Conventional Commit message.\n  validate-pr-commits       Require one pull-request commit and validate its message.\n  validate-pr-file-scope    Reject pull-request files outside approved work-item scope.\n  validate-quality-manifest Validate target registration and source ownership.\n  quality-matrix            Print the registered target matrix for CI.\n  validate-coverage-report  Require complete product-source LCOV line coverage.\n  run-quality-target        Run every quality gate for one registered target.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify repository data.\n  --pull-request-number NUMBER\n      Select the pull request to verify.\n  --repository-root PATH\n      Resolve quality-manifest paths from this repository root.\n  -h, --help\n      Print this help.\n\nInput:\n  File commands read the supplied file or standard input when no file is supplied.\n\nExit status:\n  0  The selected policy passed.\n  1  Arguments, input, policy, tool, test, or report validation failed.";
+const USAGE: &str = "Repository policy validator.\n\nUsage:\n  repo-policy validate-pr-body [--github-repository OWNER/REPO] [--pull-request-number NUMBER] [BODY_FILE]\n  repo-policy validate-commit-message [MESSAGE_FILE]\n  repo-policy validate-pr-commits --github-repository OWNER/REPO --pull-request-number NUMBER\n  repo-policy validate-pr-file-scope --github-repository OWNER/REPO --pull-request-number NUMBER\n  repo-policy validate-quality-manifest MANIFEST [--repository-root PATH]\n  repo-policy quality-matrix MANIFEST [--repository-root PATH]\n  repo-policy validate-coverage-report MANIFEST TARGET REPORT [--repository-root PATH]\n  repo-policy mutation-plan QUALITY_MANIFEST MUTATION_MANIFEST CHANGED_PATHS MUTANTS_JSON [--repository-root PATH]\n  repo-policy validate-mutation-results QUALITY_MANIFEST MUTATION_MANIFEST GROUP OUTCOMES_JSON [--repository-root PATH]\n  repo-policy run-quality-target MANIFEST TARGET [--repository-root PATH]\n\nCommands:\n  validate-pr-body          Validate the required pull request body and linked work item.\n  validate-commit-message   Validate one Conventional Commit message.\n  validate-pr-commits       Require one pull-request commit and validate its message.\n  validate-pr-file-scope    Reject pull-request files outside approved work-item scope.\n  validate-quality-manifest Validate target registration and source ownership.\n  quality-matrix            Print the registered target matrix for CI.\n  validate-coverage-report  Require complete product-source LCOV line coverage.\n  mutation-plan             Print affected mutation groups as a CI matrix.\n  validate-mutation-results Require killed mutants or approved exceptions.\n  run-quality-target        Run every quality gate for one registered target.\n\nOptions:\n  --github-repository OWNER/REPO\n      Use the authenticated GitHub CLI to verify repository data.\n  --pull-request-number NUMBER\n      Select the pull request to verify.\n  --repository-root PATH\n      Resolve quality-manifest paths from this repository root.\n  -h, --help\n      Print this help.\n\nInput:\n  File commands read the supplied file or standard input when no file is supplied.\n\nExit status:\n  0  The selected policy passed.\n  1  Arguments, input, policy, tool, test, or report validation failed.";
 
 const COMMIT_TYPES: [&str; 11] = [
     "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
@@ -45,6 +45,7 @@ struct ValidateArguments {
     body_path: Option<String>,
 }
 
+#[derive(Default)]
 struct ValidatedBody {
     issue_number: u64,
 }
@@ -76,6 +77,8 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         "validate-quality-manifest" => quality::validate_manifest(command_arguments),
         "quality-matrix" => quality::print_matrix(command_arguments),
         "validate-coverage-report" => quality::validate_coverage(command_arguments),
+        "mutation-plan" => quality::mutation_plan(command_arguments),
+        "validate-mutation-results" => quality::validate_mutation_results(command_arguments),
         "run-quality-target" => quality::run_target(command_arguments),
         _ => Err(USAGE.to_owned()),
     }

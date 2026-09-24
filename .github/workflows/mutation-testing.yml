@@ -1,0 +1,169 @@
+name: Mutation testing
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan mutation testing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has-groups: ${{ steps.plan.outputs.has-groups }}
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: rust@1.98.1
+          fallback: none
+
+      - name: Install pinned mutation tool
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-mutants@27.1.0
+          fallback: none
+
+      - name: Plan affected mutation groups
+        id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scratch="$GITHUB_WORKSPACE/tools/repo-policy/target/mutation"
+          mkdir -p "$scratch"
+          git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$scratch/changed-paths"
+          git -C tools/repo-policy diff --relative --unified=0 \
+            "$BASE_SHA" "$HEAD_SHA" > "$scratch/mutation.diff"
+          (
+            cd tools/repo-policy
+            cargo mutants --list --json --no-shuffle \
+              --in-diff "$scratch/mutation.diff"
+          ) > "$scratch/mutants.json"
+          matrix=$(cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
+            mutation-plan \
+              .github/quality-targets.toml \
+              .github/mutation-targets.toml \
+              tools/repo-policy/target/mutation/changed-paths \
+              tools/repo-policy/target/mutation/mutants.json)
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+          if [ "$matrix" = '{"include":[]}' ]; then
+            printf 'has-groups=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'has-groups=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  mutate:
+    name: Mutation (${{ matrix.name }})
+    needs: plan
+    if: needs.plan.outputs.has-groups == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: rust@1.98.1
+          fallback: none
+
+      - name: Install pinned mutation tool
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-mutants@27.1.0
+          fallback: none
+
+      - name: Run bounded mutation group
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CARGO_MANIFEST: ${{ matrix.cargo_manifest }}
+          FUNCTION_REGEX: ${{ matrix.function_regex }}
+          GROUP_NAME: ${{ matrix.name }}
+          MUTATION_FILE: ${{ matrix.mutation_file }}
+          TEST_TARGET: ${{ matrix.test_target }}
+          USE_DIFF: ${{ matrix.use_diff }}
+        run: |
+          scratch="$GITHUB_WORKSPACE/tools/repo-policy/target/mutation"
+          output="$scratch/$GROUP_NAME"
+          mkdir -p "$scratch"
+          git -C tools/repo-policy diff --relative --unified=0 \
+            "$BASE_SHA" "$HEAD_SHA" > "$scratch/mutation.diff"
+          package=$(dirname "$CARGO_MANIFEST")
+          function_pattern=${FUNCTION_REGEX#^}
+          function_pattern=${function_pattern%\$}
+          mutant_regex="( in |replace )${function_pattern}( ->| with|$)"
+          arguments=(
+            mutants
+            --in-place
+            --no-shuffle
+            --no-times
+            --timeout 15
+            --build-timeout 30
+            --output "$output"
+            --file "$MUTATION_FILE"
+            --re "$mutant_regex"
+          )
+          if [ "$USE_DIFF" = true ]; then
+            arguments+=(--in-diff "$scratch/mutation.diff")
+          fi
+          mutation_status=0
+          (
+            cd "$package"
+            timeout --signal=TERM --kill-after=5s 240s \
+              cargo "${arguments[@]}" -- --test "$TEST_TARGET"
+          ) || mutation_status=$?
+          if [ "$mutation_status" -eq 124 ] || [ "$mutation_status" -eq 137 ]; then
+            exit "$mutation_status"
+          fi
+          case "$mutation_status" in
+            0|2|3) ;;
+            *) exit "$mutation_status" ;;
+          esac
+          cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
+            validate-mutation-results \
+              .github/quality-targets.toml \
+              .github/mutation-targets.toml \
+              "$GROUP_NAME" \
+              "tools/repo-policy/target/mutation/$GROUP_NAME/mutants.out/outcomes.json"
+
+      - name: Upload machine-readable mutation results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-${{ matrix.name }}
+          path: tools/repo-policy/target/mutation/${{ matrix.name }}/mutants.out
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate:
+    name: Mutation testing
+    if: always()
+    needs: [plan, mutate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require successful affected-group mutation testing
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          MUTATION_RESULT: ${{ needs.mutate.result }}
+        run: |
+          test "$PLAN_RESULT" = success
+          test "$MUTATION_RESULT" = success -o "$MUTATION_RESULT" = skipped
