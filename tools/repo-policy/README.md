@@ -4,14 +4,15 @@
 
 The tool does not judge subjective requirements such as readability, design quality, appropriate scope, or whether evidence is truthful. Those requirements still need human review.
 
-The pinned `sha2` 0.10.9 crate supplies the SHA-256 implementation. Its fixed-input `Digest::update` and `Digest::finalize` API is infallible; input and GitHub failures are handled before hashing. No optional assembly feature is enabled.
+The pinned `sha2` 0.10.9 crate supplies the SHA-256 implementation. Its fixed-input `Digest::update` and `Digest::finalize` API is infallible; input and GitHub failures are handled before hashing. No optional assembly feature is enabled. The pinned `toml` 1.1.6 parser returns structured errors for malformed input, and the pinned `serde` 1.0.229 derive implementation maps valid TOML into a schema that rejects unknown fields. Manifest read, parse, schema, path, ownership, process, and report failures are propagated as policy failures.
 
 ## Prerequisites
 
 - Rust and Cargo with Rust 2024 edition support. CI uses Rust 1.98.1.
+- `cargo-llvm-cov` 0.9.1 when running repository quality targets.
 - [GitHub CLI](https://cli.github.com/) authenticated for the target repository when using `--github-repository`. Structural validation does not require GitHub CLI or network access.
 
-The Rust crate has no third-party runtime dependencies.
+The Rust crate makes no third-party network requests at runtime.
 
 ## Usage
 
@@ -69,6 +70,22 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
   validate-pr-file-scope \
     --github-repository devdesignersid/buttter \
     --pull-request-number 10
+```
+
+Validate the repository quality manifest and print its CI matrix:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  validate-quality-manifest .github/quality-targets.toml
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  quality-matrix .github/quality-targets.toml
+```
+
+Run every gate for one registered target:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  run-quality-target .github/quality-targets.toml repo-policy
 ```
 
 Print built-in help:
@@ -129,6 +146,14 @@ The latest surviving comment whose body starts with `scope-approved` controls. I
 `validate-pr-file-scope` obtains the linked issue from the validated pull request body. It verifies that the issue is open and structurally complete, then reads the declaration, approval comments, pull-request metadata, and paginated pull-request file list through GitHub API version `2022-11-28`. Additions, modifications, deletions, and the `changed` and `unchanged` statuses require the current path to be approved. Renames and copies require both current and previous paths. An empty diff passes when the declaration and approval are valid. Duplicate or malformed file records, changed-file count mismatches, more than the endpoint's 3,000-file limit, invalid encoding, unknown statuses, pagination failures, authentication failures, API failures, and GitHub CLI failures fail closed.
 
 Scope expansion requires a new work-item declaration and a new digest-bound approval, followed by a new pull request. Do not update or reuse the old pull request. Because GitHub does not emit a pull-request event for every linked-issue state change, rerun the check before relying on an earlier result if issue data may have changed.
+
+## Repository-quality contract
+
+`.github/quality-targets.toml` is the machine-readable inventory of repository-authored code targets. Each target declares one Rust Cargo manifest, its platform, product-source roots, test roots, generated paths, third-party paths, and supporting files. Lists are exact, sorted repository-relative paths. Categories cannot overlap, and target ownership cannot overlap. Rust source files and executable tracked files must belong to a target. Supporting shell hooks are owned and tested by `repo-policy`, but only Rust files under `product_sources` are included in the line-coverage denominator.
+
+Only `rust` targets are currently permitted. `linux` maps to `ubuntu-24.04`; `macos` maps to `macos-15`. Adding another target or platform requires a manifest and policy change rather than an unregistered workflow command.
+
+`run-quality-target` verifies the pinned tool versions, then runs Rustfmt, Clippy with warnings denied, and `cargo llvm-cov`. The coverage command executes the target's tests while producing LCOV, so tests are not run twice. LCOV must contain every Rust product file, no non-product file, valid line records, and no line with a zero execution count. Missing tools, nonzero subprocess results, missing files, malformed reports, and omitted files fail closed. Tests, generated paths, third-party paths, and supporting files are outside the product-code line denominator.
 
 ## Commit-message contract
 
@@ -282,13 +307,13 @@ The workflow uses `pull_request_target` and trusted policy code from the pull re
 
 `.github/workflows/file-scope-policy.yml` runs for pull request creation, edits, reopening, commit synchronization, and transitions to ready for review. It checks out and executes only policy code from the pull request's base commit. It treats pull-request and issue content as data, never checks out or executes pull-request code, and has only `contents: read`, `issues: read`, and `pull-requests: read` permissions.
 
-`.github/workflows/repo-policy-quality.yml` runs formatting, Clippy, tests, and the 100% line-coverage gate when the issue template, policy tool, commit hook, or policy workflows change. That workflow uses the pull request code but has read-only repository permissions and does not request or use repository secrets.
+`.github/workflows/repo-policy-quality.yml` runs on every pull request and every push to `main`, so an unregistered source path cannot bypass the workflow's path filters. It validates the manifest, derives a Linux/macOS matrix, and runs every registered target from pull-request code with read-only repository permissions and no secrets. The final `Repository quality` job aggregates planning and matrix results into one stable required-check context.
 
-Policy jobs have explicit five-minute timeouts, and the quality job has a ten-minute timeout. These bounds fail closed on hangs while leaving substantial margin over observed execution times.
+Policy jobs have explicit five-minute timeouts. Repository-quality planning and aggregation have ten- and five-minute timeouts, and target jobs have a 30-minute timeout.
 
 ### Server-side enforcement
 
-The `PR body policy`, `Commit message policy`, and `File scope policy` status checks are required on `main`; otherwise CI would only detect and report violations.
+The `PR body policy`, `Commit message policy`, `File scope policy`, and stable `Repository quality` status checks are required on `main`; otherwise CI would only detect and report violations.
 
 Online issue verification reflects the issue state when the workflow runs. If an issue is closed without another supported pull request event, rerun the workflow before relying on the previous result.
 
@@ -306,19 +331,24 @@ Do not use `--no-verify` or otherwise bypass repository-managed hooks. Review th
 
 ## Development
 
-Run every local quality gate from the repository root:
+Install the exact CI tools and reproduce the manifest-driven gate from the repository root:
+
+```sh
+rustup toolchain install 1.98.1 --component rustfmt --component clippy
+cargo install cargo-llvm-cov --version 0.9.1 --locked
+cargo +1.98.1 run --manifest-path tools/repo-policy/Cargo.toml -- \
+  validate-quality-manifest .github/quality-targets.toml
+cargo +1.98.1 run --manifest-path tools/repo-policy/Cargo.toml -- \
+  run-quality-target .github/quality-targets.toml repo-policy
+```
+
+The individual Rust gates remain useful while iterating:
 
 ```sh
 cargo fmt --manifest-path tools/repo-policy/Cargo.toml -- --check
 cargo clippy --manifest-path tools/repo-policy/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path tools/repo-policy/Cargo.toml
 cargo llvm-cov --manifest-path tools/repo-policy/Cargo.toml --fail-under-lines 100
-```
-
-`cargo-llvm-cov` 0.9.1 is used by CI. Install that version when reproducing the coverage gate locally:
-
-```sh
-cargo install cargo-llvm-cov --version 0.9.1 --locked
 ```
 
 ## Maintaining the policy

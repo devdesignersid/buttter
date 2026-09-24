@@ -1,0 +1,21 @@
+version = 1
+
+[tools]
+rust = "1.98.1"
+cargo_llvm_cov = "0.9.1"
+
+[[targets]]
+name = "repo-policy"
+kind = "rust"
+platform = "linux"
+cargo_manifest = "tools/repo-policy/Cargo.toml"
+product_sources = ["tools/repo-policy/src"]
+test_sources = ["tools/repo-policy/tests"]
+generated = ["tools/repo-policy/Cargo.lock"]
+third_party = []
+supporting_files = [
+  ".githooks/commit-msg",
+  ".githooks/pre-commit",
+  ".githooks/pre-push",
+  ".githooks/reference-transaction",
+]

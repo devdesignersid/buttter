@@ -1,39 +1,56 @@
-name: Repository policy quality
+name: Repository quality
 
 on:
   pull_request:
-    paths:
-      - .githooks/commit-msg
-      - .github/ISSUE_TEMPLATE/work-item.yml
-      - .github/workflows/commit-message-policy.yml
-      - .github/workflows/file-scope-policy.yml
-      - .github/workflows/pr-body-policy.yml
-      - .github/workflows/repo-policy-quality.yml
-      - tools/repo-policy/**
   push:
     branches: [main]
-    paths:
-      - .githooks/commit-msg
-      - .github/ISSUE_TEMPLATE/work-item.yml
-      - .github/workflows/commit-message-policy.yml
-      - .github/workflows/file-scope-policy.yml
-      - .github/workflows/pr-body-policy.yml
-      - .github/workflows/repo-policy-quality.yml
-      - tools/repo-policy/**
 
 permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Repository policy quality
+  plan:
+    name: Plan repository quality
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: rust@1.98.1
+          fallback: none
+
+      - name: Validate manifest and plan targets
+        id: matrix
+        run: |
+          cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
+            validate-quality-manifest .github/quality-targets.toml
+          matrix=$(cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
+            quality-matrix .github/quality-targets.toml)
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Quality (${{ matrix.name }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
 
       - name: Install pinned Rust toolchain
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
@@ -47,11 +64,22 @@ jobs:
           tool: cargo-llvm-cov@0.9.1
           fallback: none
 
-      - name: Check formatting
-        run: cargo fmt --manifest-path tools/repo-policy/Cargo.toml -- --check
+      - name: Run target quality gates
+        run: |
+          cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+            run-quality-target .github/quality-targets.toml ${{ matrix.name }}
 
-      - name: Lint all targets
-        run: cargo clippy --manifest-path tools/repo-policy/Cargo.toml --all-targets -- -D warnings
-
-      - name: Test with complete line coverage
-        run: cargo llvm-cov --manifest-path tools/repo-policy/Cargo.toml --fail-under-lines 100
+  aggregate:
+    name: Repository quality
+    if: always()
+    needs: [plan, quality]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every registered target
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+        run: |
+          test "$PLAN_RESULT" = success
+          test "$QUALITY_RESULT" = success
