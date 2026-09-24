@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - .githooks/commit-msg
+      - .github/ISSUE_TEMPLATE/work-item.yml
       - .github/workflows/commit-message-policy.yml
+      - .github/workflows/file-scope-policy.yml
       - .github/workflows/pr-body-policy.yml
       - .github/workflows/repo-policy-quality.yml
       - tools/repo-policy/**
@@ -12,7 +14,9 @@ on:
     branches: [main]
     paths:
       - .githooks/commit-msg
+      - .github/ISSUE_TEMPLATE/work-item.yml
       - .github/workflows/commit-message-policy.yml
+      - .github/workflows/file-scope-policy.yml
       - .github/workflows/pr-body-policy.yml
       - .github/workflows/repo-policy-quality.yml
       - tools/repo-policy/**

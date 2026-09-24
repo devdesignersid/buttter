@@ -61,6 +61,16 @@ body:
     id: review-scope
     attributes:
       label: Review scope
-      description: Identify repository-authored, generated, and third-party material requiring review.
+      description: Identify repository-authored, generated, and third-party material requiring review. Replace the example with a sorted JSON array containing every exact file path; list dotfiles and generated files explicitly. Glob and directory patterns are not allowed.
+      value: |
+        Describe the material requiring review and any generated or third-party exclusions.
+
+        <!-- approved-paths:start -->
+        ```json
+        [
+          "path/to/exact-file"
+        ]
+        ```
+        <!-- approved-paths:end -->
     validations:
       required: true
