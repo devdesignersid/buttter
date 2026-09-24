@@ -4,7 +4,7 @@
 
 The tool does not judge subjective requirements such as readability, design quality, appropriate scope, or whether evidence is truthful. Those requirements still need human review.
 
-The pinned `sha2` 0.10.9 crate supplies the SHA-256 implementation. Its fixed-input `Digest::update` and `Digest::finalize` API is infallible; input and GitHub failures are handled before hashing. No optional assembly feature is enabled. The pinned `toml` 1.1.6 parser returns structured errors for malformed input, and the pinned `serde` 1.0.229 derive implementation maps valid TOML into a schema that rejects unknown fields. Manifest read, parse, schema, path, ownership, process, and report failures are propagated as policy failures.
+The pinned `sha2` 0.10.9 crate supplies the SHA-256 implementation. Its fixed-input `Digest::update` and `Digest::finalize` API is infallible; input and GitHub failures are handled before hashing. No optional assembly feature is enabled. The pinned `toml` 1.1.6 parser returns structured errors for malformed input, and the pinned `serde` 1.0.229 derive implementation maps valid TOML into schemas that reject unknown fields. The pinned `regex` 1.13.1 constructor reports invalid patterns and configured size-limit failures; every configured pattern is compiled during manifest validation. The pinned `serde_json` 1.0.151 parser reports malformed or schema-incompatible input, and its serializer reports data-model serialization failures; both errors are propagated as policy failures. Manifest read, parse, schema, path, ownership, process, and report failures are propagated rather than discarded.
 
 ## Prerequisites
 
@@ -88,6 +88,17 @@ cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
   run-quality-target .github/quality-targets.toml repo-policy
 ```
 
+Plan affected mutation groups from NUL-delimited changed paths and cargo-mutants JSON, then validate one group's outcomes:
+
+```sh
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  mutation-plan .github/quality-targets.toml .github/mutation-targets.toml \
+  changed-paths mutants.json
+cargo run --manifest-path tools/repo-policy/Cargo.toml -- \
+  validate-mutation-results .github/quality-targets.toml \
+  .github/mutation-targets.toml pr-body mutants.out/outcomes.json
+```
+
 Print built-in help:
 
 ```sh
@@ -154,6 +165,16 @@ Scope expansion requires a new work-item declaration and a new digest-bound appr
 Only `rust` targets are currently permitted. `linux` maps to `ubuntu-24.04`; `macos` maps to `macos-15`. Adding another target or platform requires a manifest and policy change rather than an unregistered workflow command.
 
 `run-quality-target` verifies the pinned tool versions, then runs Rustfmt, Clippy with warnings denied, and `cargo llvm-cov`. The coverage command executes the target's tests while producing LCOV, so tests are not run twice. LCOV must contain every Rust product file, no non-product file, valid line records, and no line with a zero execution count. Missing tools, nonzero subprocess results, missing files, malformed reports, and omitted files fail closed. Tests, generated paths, third-party paths, and supporting files are outside the product-code line denominator.
+
+## Mutation-testing contract
+
+`.github/mutation-targets.toml` groups product functions by exact product file and regular expression. Each group declares the test and behavior-configuration paths that trigger a full group run and the Cargo integration-test target used for that group. Product changes are intersected with cargo-mutants' base-to-head diff output, while test-only and behavior-configuration-only changes run every mutant in the mapped group. Changed repository-authored tests and inventoried behavior paths fail closed when no group maps them; changed product mutants fail closed when no group expression maps them.
+
+Mutation plans are deterministic and JSON encoded. Group names, test targets, paths, ownership, ordering, regular expressions, and referenced files are validated before a matrix is emitted. Tests, generated files, and third-party paths are never mutation inputs.
+
+The workflow pins Rust 1.98.1 and cargo-mutants 27.1.0, disables shuffle, runs affected groups in parallel, limits each mutation process to four minutes, and retains a five-minute GitHub job timeout as a fallback. Machine-readable outcomes are uploaded for review. Missed and timed-out mutants fail. An equivalent missed mutant or unsupported unviable mutant passes only when its group contains a checked-in outcome-specific regular expression and a non-empty reason. The validator checks the exception record, not the truth of the classification or the identity of the human reviewer; explicit human approval remains required.
+
+The stable `Mutation testing` aggregate job passes only when planning and every selected group pass. Full-workspace mutation testing is not a pull-request gate. Its schedule remains unset until runtime is measured.
 
 ## Commit-message contract
 
@@ -309,11 +330,13 @@ The workflow uses `pull_request_target` and trusted policy code from the pull re
 
 `.github/workflows/repo-policy-quality.yml` runs on every pull request and every push to `main`, so an unregistered source path cannot bypass the workflow's path filters. It validates the manifest, derives a Linux/macOS matrix, and runs every registered target from pull-request code with read-only repository permissions and no secrets. The final `Repository quality` job aggregates planning and matrix results into one stable required-check context.
 
+`.github/workflows/mutation-testing.yml` runs on every pull request with read-only repository permissions and no secrets. It executes pull-request code and tests in a disposable checkout, computes the base-to-head diff, plans affected groups, and runs each group in parallel. The final `Mutation testing` job provides one stable required-check context. In-place mutation can leave a timed-out checkout modified, so the workflow never runs in local hooks and relies on runner disposal after the job.
+
 Policy jobs have explicit five-minute timeouts. Repository-quality planning and aggregation have ten- and five-minute timeouts, and target jobs have a 30-minute timeout.
 
 ### Server-side enforcement
 
-The `PR body policy`, `Commit message policy`, `File scope policy`, and stable `Repository quality` status checks are required on `main`; otherwise CI would only detect and report violations.
+The `PR body policy`, `Commit message policy`, `File scope policy`, stable `Repository quality`, and stable `Mutation testing` status checks are required on `main`; otherwise CI would only detect and report violations.
 
 Online issue verification reflects the issue state when the workflow runs. If an issue is closed without another supported pull request event, rerun the workflow before relying on the previous result.
 
@@ -336,6 +359,7 @@ Install the exact CI tools and reproduce the manifest-driven gate from the repos
 ```sh
 rustup toolchain install 1.98.1 --component rustfmt --component clippy
 cargo install cargo-llvm-cov --version 0.9.1 --locked
+cargo install cargo-mutants --version 27.1.0 --locked
 cargo +1.98.1 run --manifest-path tools/repo-policy/Cargo.toml -- \
   validate-quality-manifest .github/quality-targets.toml
 cargo +1.98.1 run --manifest-path tools/repo-policy/Cargo.toml -- \

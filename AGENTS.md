@@ -44,7 +44,7 @@ These instructions apply to the entire repository.
 
 ### Mutation Testing
 
-- Require merge-blocking mutation testing of affected product modules when a pull request changes repository-authored product logic, its tests, or configuration that can change product behavior.
+- Require merge-blocking mutation testing of affected product functions or changed regions when a pull request changes repository-authored product logic, its tests, or configuration that can change product behavior.
 - Require every viable mutant to be killed before merge.
 - Do not mutate test code, generated code, or third-party source.
 - Require evidence and explicit human approval for every mutant classified as equivalent or unsupported.

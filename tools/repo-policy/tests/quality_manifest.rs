@@ -58,6 +58,7 @@ fn manifest(platform: &str) -> String {
 [tools]
 rust = "1.98.1"
 cargo_llvm_cov = "0.9.1"
+cargo_mutants = "27.1.0"
 
 [[targets]]
 name = "app"
@@ -193,6 +194,10 @@ fn rejects_malformed_or_ambiguous_manifests() {
         ),
         (
             &manifest("linux").replace("rust = \"1.98.1\"", "rust = \"stable\""),
+            "exact numeric version",
+        ),
+        (
+            &manifest("linux").replace("cargo_mutants = \"27.1.0\"", "cargo_mutants = \"latest\""),
             "exact numeric version",
         ),
         (
