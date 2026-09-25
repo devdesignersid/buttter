@@ -41,7 +41,7 @@ test_target = "pr_body"
 name = "quality"
 target = "repo-policy"
 product_file = "tools/repo-policy/src/quality.rs"
-function_regex = "^(find_target|validate_structure)$"
+function_regex = "^(find_target|run_target|validate_structure)$"
 test_paths = [
   "tools/repo-policy/tests/quality_manifest.rs",
   "tools/repo-policy/tests/quality_workflow.rs",
