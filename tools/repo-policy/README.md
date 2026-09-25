@@ -217,10 +217,14 @@ These level-two and level-three headings must each occur exactly once and in thi
 3. `## Scope`
 4. `### Included`
 5. `### Excluded`
-6. `## Evidence`
-7. `## Executed Quality Gates`
-8. `## Human Line Review`
-9. `## Unverified Items`
+6. `## Pre-Completion Review`
+7. `## Evidence`
+8. `### Repository Evidence`
+9. `### External Evidence`
+10. `### Performance Evidence`
+11. `## Executed Quality Gates`
+12. `## Human Line Review`
+13. `## Unverified Items`
 
 ### Related issue
 
@@ -279,17 +283,34 @@ Each subsection must contain one or more non-empty bullet items. When there are 
 - None: no additional behavior is excluded.
 ```
 
+### Pre-completion review
+
+All twelve template fields must occur exactly once in template order. Each field must be checked and contain a substantive conclusion. Empty values and the exact placeholders `TODO`, `TBD`, `N/A`, `None`, `Placeholder`, and angle-bracket placeholders are rejected. Use a specific `Not applicable: <reason>` conclusion when a category does not apply.
+
+The fields cover requirement fit, boundaries and regressions, design, tests, correctness, standards, scope, maintainability, side effects, documentation, evidence, and unverified items. The validator checks completeness and syntax; human review still determines whether each conclusion is accurate and adequate.
+
 ### Evidence
 
-All three fields must appear in template order and contain values:
+Repository evidence contains one or more file or command records:
 
 ```md
-- Repository evidence: `path/to/file:10-20`.
-- External evidence: Not applicable: the behavior is repository-defined.
-- Performance evidence or not applicable: Not applicable: performance is unchanged.
+- File: `path/to/file:L10-L20`
+- Command: `cargo test` | Output: `test result: ok`
 ```
 
-Use `Not applicable: <reason>` instead of leaving an inapplicable field empty.
+A file path must be repository-relative, traversal-free, and identify UTF-8 text. Line numbers are positive, the end is not before the start, and the range cannot exceed the file. Local validation resolves files from the current directory. Trusted pull-request validation reads files from the pull request's head revision through the GitHub API while continuing to execute policy code from the base revision.
+
+A command and its recorded output must both be non-empty. The validator does not execute the command or prove that the output came from it.
+
+Each external evidence record uses this syntax:
+
+```md
+- Source: https://doc.rust-lang.org/reference/ | Version/revision: Rust 1.98.1 | Accessed: 2025-02-28
+```
+
+The URL must use HTTPS, the version or revision must be substantive, and the access date must be a valid `YYYY-MM-DD` calendar date. When no external source applies, use one non-empty `- Not applicable: <reason>` record. HTTPS and record structure are mechanically checked; whether a source is primary remains subject to human judgment.
+
+Performance evidence contains exactly one command/output record in the repository-evidence format or exactly one `- Not applicable: <reason>` record. Reproducibility and the truth or significance of the result remain subject to human judgment.
 
 ### Executed quality gates
 
@@ -316,13 +337,13 @@ Use `None` when a field has no items.
 
 ### Unverified items
 
-Provide one or more non-empty bullet items. Use `- None` when nothing remains unverified.
+Provide one or more concrete, non-placeholder bullet items. Use exactly `- None` when nothing remains unverified; do not combine `None` with other items.
 
 ## CI integration and trust boundary
 
 `.github/workflows/pr-body-policy.yml` runs for pull request creation, edits, reopening, synchronization, and transitions to ready for review. Draft pull requests may remain failing while incomplete; ready-for-review pull requests are expected to pass.
 
-The workflow uses `pull_request_target`, checks out the pull request's base commit, and executes only trusted policy code from that commit. It does not check out or execute code from the pull request. Its token has only `contents: read`, `issues: read`, and `pull-requests: read` permissions. The pull request body is passed as data through an environment variable rather than evaluated as shell code.
+The workflow uses `pull_request_target`, checks out the pull request's base commit, and executes only trusted policy code from that commit. It does not check out or execute code from the pull request. Its token has only `contents: read`, `issues: read`, and `pull-requests: read` permissions. The pull request body is passed as data through an environment variable rather than evaluated as shell code. Repository evidence files are fetched as inert bytes from the pull request head through the contents API; they are never executed.
 
 `.github/workflows/commit-message-policy.yml` runs for pull request creation, edits, reopening, commit synchronization, and transitions to ready for review. Draft pull requests may remain failing while incomplete; ready-for-review pull requests must contain exactly one commit and pass message validation. The `edited` event covers base-branch changes, while `synchronize` covers commits being added, removed, or rebased.
 
@@ -338,7 +359,7 @@ Policy jobs have explicit five-minute timeouts. Repository-quality planning and 
 
 ### Server-side enforcement
 
-The `PR body policy`, `Commit message policy`, `File scope policy`, stable `Repository quality`, and stable `Mutation testing` status checks are required on `main`; otherwise CI would only detect and report violations.
+The `PR body policy`, `Commit message policy`, `File scope policy`, stable `Repository quality`, and stable `Mutation testing` status checks are required on `main`; otherwise CI would only detect and report violations. The PR-body check proves the required record structure and referenced file ranges, not the truth of conclusions or outputs, source primacy, design quality, readability, maintainability, appropriate scope, or performance significance. Those judgments and human line review remain mandatory.
 
 Online issue verification reflects the issue state when the workflow runs. If an issue is closed without another supported pull request event, rerun the workflow before relying on the previous result.
 

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{self, Read};
+use std::path::{Component, Path};
 use std::process::{self, Command};
 
 use sha2::{Digest, Sha256};
@@ -14,13 +15,17 @@ const COMMIT_TYPES: [&str; 11] = [
     "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
 ];
 
-const HEADINGS: [&str; 9] = [
+const HEADINGS: [&str; 13] = [
     "## Related Issue",
     "## Acceptance Criteria",
     "## Scope",
     "### Included",
     "### Excluded",
+    "## Pre-Completion Review",
     "## Evidence",
+    "### Repository Evidence",
+    "### External Evidence",
+    "### Performance Evidence",
     "## Executed Quality Gates",
     "## Human Line Review",
     "## Unverified Items",
@@ -48,6 +53,13 @@ struct ValidateArguments {
 #[derive(Default)]
 struct ValidatedBody {
     issue_number: u64,
+    file_evidence: Vec<FileEvidence>,
+}
+
+struct FileEvidence {
+    path: String,
+    first_line: usize,
+    last_line: usize,
 }
 
 fn main() {
@@ -94,11 +106,20 @@ fn run_validate_pr_body(command_arguments: &[String]) -> Result<(), String> {
         )
     })?;
 
-    if let Some(repository) = arguments.repository {
-        verify_open_issue(&repository, validated.issue_number)?;
+    if let Some(repository) = arguments.repository.as_deref() {
+        verify_open_issue(repository, validated.issue_number)?;
         if let Some(pull_request_number) = arguments.pull_request_number {
-            verify_work_item_readiness(&repository, validated.issue_number, pull_request_number)?;
+            verify_work_item_readiness(repository, validated.issue_number, pull_request_number)?;
+            validate_remote_file_evidence(
+                repository,
+                pull_request_number,
+                &validated.file_evidence,
+            )?;
+        } else {
+            validate_local_file_evidence(&validated.file_evidence)?;
         }
+    } else {
+        validate_local_file_evidence(&validated.file_evidence)?;
     }
 
     println!("Pull request body is valid.");
@@ -1004,26 +1025,280 @@ fn validate_body(body: &str) -> Result<ValidatedBody, Vec<String>> {
     validate_checklist("Acceptance Criteria", &section(1), &mut violations);
     validate_bullet_list("Included", &section(3), &mut violations);
     validate_bullet_list("Excluded", &section(4), &mut violations);
-    validate_labeled_lines(
-        "Evidence",
-        &section(5),
-        &[
-            "- Repository evidence:",
-            "- External evidence:",
-            "- Performance evidence or not applicable:",
-        ],
-        &mut violations,
-    );
-    validate_quality_gates(&section(6), &mut violations);
-    validate_human_review(&section(7), &mut violations);
-    validate_bullet_list("Unverified Items", &section(8), &mut violations);
+    validate_pre_completion_review(&section(5), &mut violations);
+    let file_evidence = validate_repository_evidence(&section(7), &mut violations);
+    validate_external_evidence(&section(8), &mut violations);
+    validate_performance_evidence(&section(9), &mut violations);
+    validate_quality_gates(&section(10), &mut violations);
+    validate_human_review(&section(11), &mut violations);
+    validate_unverified_items(&section(12), &mut violations);
 
     if violations.is_empty() {
         Ok(ValidatedBody {
             issue_number: issue_number.expect("valid body must have an issue number"),
+            file_evidence,
         })
     } else {
         Err(violations)
+    }
+}
+
+fn validate_pre_completion_review(lines: &[&str], violations: &mut Vec<String>) {
+    const LABELS: [&str; 12] = [
+        "Requirement fit",
+        "Boundaries and regressions",
+        "Design",
+        "Tests",
+        "Correctness",
+        "Standards",
+        "Scope",
+        "Maintainability",
+        "Side effects",
+        "Documentation",
+        "Evidence",
+        "Unverified items",
+    ];
+
+    if lines.len() != LABELS.len() {
+        violations.push(
+            "Pre-Completion Review must contain every required checked field exactly once in template order"
+                .to_owned(),
+        );
+    }
+    for (index, label) in LABELS.iter().enumerate() {
+        let lower = format!("- [x] {label}:");
+        let upper = format!("- [X] {label}:");
+        let matching_fields = lines
+            .iter()
+            .filter(|line| line.starts_with(&lower) || line.starts_with(&upper))
+            .count();
+        let value = lines.get(index).and_then(|line| {
+            line.strip_prefix(&lower)
+                .or_else(|| line.strip_prefix(&upper))
+        });
+        if matching_fields != 1 || !value.is_some_and(is_substantive_conclusion) {
+            violations.push(format!(
+                "Pre-Completion Review field `{label}` must be checked, occur exactly once in template order, and contain a non-placeholder conclusion"
+            ));
+        }
+    }
+}
+
+fn is_substantive_conclusion(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "todo" | "tbd" | "n/a" | "none" | "placeholder"
+        )
+        && !(value.starts_with('<') && value.ends_with('>'))
+}
+
+fn validate_repository_evidence(lines: &[&str], violations: &mut Vec<String>) -> Vec<FileEvidence> {
+    let mut files = Vec::new();
+    if lines.is_empty() {
+        violations.push("Repository Evidence must contain one or more records".to_owned());
+        return files;
+    }
+
+    for line in lines {
+        if line.starts_with("- File:") {
+            match parse_file_evidence(line) {
+                Ok(evidence) => files.push(evidence),
+                Err(message) => violations.push(message),
+            }
+        } else if line.starts_with("- Command:") {
+            if let Err(message) = parse_command_evidence(line) {
+                violations.push(format!("Repository Evidence {message}"));
+            }
+        } else {
+            violations.push(format!(
+                "Repository Evidence record `{line}` must be a file reference or recorded command output"
+            ));
+        }
+    }
+    files
+}
+
+fn parse_file_evidence(line: &str) -> Result<FileEvidence, String> {
+    let value = line
+        .strip_prefix("- File: `")
+        .and_then(|value| value.strip_suffix('`'))
+        .ok_or_else(|| {
+            "Repository Evidence file records must use `- File: `path:Lstart-Lend``".to_owned()
+        })?;
+    let (path, range) = value.rsplit_once(":L").ok_or_else(|| {
+        "Repository Evidence file records must contain a `:Lstart-Lend` line range".to_owned()
+    })?;
+    validate_repository_path(path)?;
+    let (first, last) = range.split_once("-L").ok_or_else(|| {
+        "Repository Evidence file records must contain a `:Lstart-Lend` line range".to_owned()
+    })?;
+    let first_line = first
+        .parse::<usize>()
+        .ok()
+        .filter(|line| *line > 0)
+        .ok_or_else(|| "Repository Evidence line range must start above zero".to_owned())?;
+    let last_line = last
+        .parse::<usize>()
+        .ok()
+        .filter(|line| *line >= first_line)
+        .ok_or_else(|| {
+            "Repository Evidence line range must end at or after its first line".to_owned()
+        })?;
+    Ok(FileEvidence {
+        path: path.to_owned(),
+        first_line,
+        last_line,
+    })
+}
+
+fn validate_repository_path(path: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    let valid = !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path.components().all(|component| {
+            matches!(component, Component::Normal(_))
+                && component
+                    .as_os_str()
+                    .to_str()
+                    .is_some_and(|part| !part.contains(['\\', '\0']))
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err("Repository Evidence paths must be repository-relative without traversal".to_owned())
+    }
+}
+
+fn parse_command_evidence(line: &str) -> Result<(), String> {
+    let value = line
+        .strip_prefix("- Command: `")
+        .ok_or_else(|| "command records must use the documented syntax".to_owned())?;
+    let (command, output) = value
+        .split_once("` | Output: `")
+        .ok_or_else(|| "command records must include ` | Output: `".to_owned())?;
+    let output = output
+        .strip_suffix('`')
+        .ok_or_else(|| "command output must end with a backtick".to_owned())?;
+    if command.trim().is_empty() {
+        return Err("command must not be empty".to_owned());
+    }
+    if output.trim().is_empty() {
+        return Err("command output must not be empty".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_external_evidence(lines: &[&str], violations: &mut Vec<String>) {
+    if lines.is_empty() {
+        violations.push("External Evidence must contain one or more records".to_owned());
+        return;
+    }
+    for line in lines {
+        if let Some(reason) = line.strip_prefix("- Not applicable:") {
+            if !is_substantive_conclusion(reason) {
+                violations.push(
+                    "External Evidence not-applicable records require a non-empty reason"
+                        .to_owned(),
+                );
+            }
+            continue;
+        }
+        let valid = line.strip_prefix("- Source: ").and_then(|value| {
+            let (url, remainder) = value.split_once(" | Version/revision: ")?;
+            let (version, date) = remainder.split_once(" | Accessed: ")?;
+            Some(valid_https_url(url) && is_substantive_conclusion(version) && validate_date(date))
+        });
+        if valid != Some(true) {
+            violations.push(
+                "External Evidence records require a primary-source HTTPS URL, version or revision, and valid `YYYY-MM-DD` access date"
+                    .to_owned(),
+            );
+        }
+    }
+}
+
+fn valid_https_url(value: &str) -> bool {
+    let Some(remainder) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = remainder.split('/').next().unwrap_or_default();
+    !authority.is_empty()
+        && authority.contains('.')
+        && !authority.starts_with('.')
+        && !authority.ends_with('.')
+        && !value.chars().any(char::is_whitespace)
+}
+
+fn validate_date(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+    if parts.len() != 3
+        || parts[0].len() != 4
+        || parts[1].len() != 2
+        || parts[2].len() != 2
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-')
+    {
+        return false;
+    }
+    let Some(year) = parts[0].parse::<u32>().ok().filter(|year| *year > 0) else {
+        return false;
+    };
+    let Some(month) = parts[1]
+        .parse::<u32>()
+        .ok()
+        .filter(|month| (1..=12).contains(month))
+    else {
+        return false;
+    };
+    let day = parts[2]
+        .parse::<u32>()
+        .expect("two ASCII digits must parse as u32");
+    (1..=days_in_month(year, month)).contains(&day)
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+}
+
+fn validate_performance_evidence(lines: &[&str], violations: &mut Vec<String>) {
+    let valid = match lines {
+        [line] => line.strip_prefix("- Not applicable:").map_or_else(
+            || parse_command_evidence(line).is_ok(),
+            is_substantive_conclusion,
+        ),
+        _ => false,
+    };
+    if !valid {
+        violations.push(
+            "Performance Evidence must contain one reproducible command and result or one non-empty not-applicable reason"
+                .to_owned(),
+        );
+    }
+}
+
+fn validate_unverified_items(lines: &[&str], violations: &mut Vec<String>) {
+    let valid = lines == ["- None"]
+        || (!lines.is_empty()
+            && lines.iter().all(|line| {
+                line.strip_prefix("- ")
+                    .is_some_and(|item| is_substantive_conclusion(item) && item != "None")
+            }));
+    if !valid {
+        violations.push(
+            "Unverified Items must contain concrete bullet items or exactly `- None`".to_owned(),
+        );
     }
 }
 
@@ -1104,24 +1379,6 @@ fn validate_bullet_list(section: &str, lines: &[&str], violations: &mut Vec<Stri
     }
 }
 
-fn validate_labeled_lines(
-    section: &str,
-    lines: &[&str],
-    labels: &[&str],
-    violations: &mut Vec<String>,
-) {
-    let valid = lines.len() == labels.len()
-        && lines.iter().zip(labels).all(|(line, label)| {
-            line.strip_prefix(label)
-                .is_some_and(|value| !value.trim().is_empty())
-        });
-    if !valid {
-        violations.push(format!(
-            "{section} must complete every required field in template order"
-        ));
-    }
-}
-
 fn validate_quality_gates(lines: &[&str], violations: &mut Vec<String>) {
     let valid_header = lines.first() == Some(&"| Gate or command | Result |")
         && lines.get(1) == Some(&"| --- | --- |");
@@ -1173,6 +1430,93 @@ fn validate_human_review(lines: &[&str], violations: &mut Vec<String>) {
     }
 }
 
+fn validate_local_file_evidence(evidence: &[FileEvidence]) -> Result<(), String> {
+    let root = env::current_dir()
+        .and_then(|path| path.canonicalize())
+        .map_err(|error| format!("could not resolve repository root: {error}"))?;
+    for item in evidence {
+        let path = root.join(&item.path);
+        let resolved = path.canonicalize().map_err(|error| {
+            format!(
+                "Repository Evidence path `{}` does not exist or cannot be read: {error}",
+                item.path
+            )
+        })?;
+        if !resolved.starts_with(&root) || !resolved.is_file() {
+            return Err(format!(
+                "Repository Evidence path `{}` must identify a repository file",
+                item.path
+            ));
+        }
+        let contents = fs::read(&resolved).map_err(|error| {
+            format!(
+                "could not read Repository Evidence path `{}`: {error}",
+                item.path
+            )
+        })?;
+        validate_file_contents(item, &contents)?;
+    }
+    Ok(())
+}
+
+fn validate_remote_file_evidence(
+    repository: &str,
+    pull_request_number: u64,
+    evidence: &[FileEvidence],
+) -> Result<(), String> {
+    let pull_endpoint = format!("repos/{repository}/pulls/{pull_request_number}");
+    let subject = format!("pull request #{pull_request_number} head revision");
+    let head = github_api(&pull_endpoint, ".head.sha", false, &subject)?;
+    let head = head.trim();
+    if head.len() != 40 || !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("GitHub API returned an invalid pull-request head revision".to_owned());
+    }
+    for item in evidence {
+        let endpoint = format!(
+            "repos/{repository}/contents/{}?ref={head}",
+            percent_encode_path(&item.path)
+        );
+        let contents = github_api_raw(
+            &endpoint,
+            &format!(
+                "Repository Evidence path `{}` at the pull-request head",
+                item.path
+            ),
+        )?;
+        validate_file_contents(item, &contents)?;
+    }
+    Ok(())
+}
+
+fn percent_encode_path(path: &str) -> String {
+    let mut encoded = String::new();
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn validate_file_contents(item: &FileEvidence, contents: &[u8]) -> Result<(), String> {
+    let contents = std::str::from_utf8(contents).map_err(|_| {
+        format!(
+            "Repository Evidence path `{}` must contain UTF-8 text",
+            item.path
+        )
+    })?;
+    let line_count = contents.lines().count();
+    if item.last_line > line_count {
+        return Err(format!(
+            "Repository Evidence line range L{}-L{} exceeds the {line_count} lines in `{}`",
+            item.first_line, item.last_line, item.path
+        ));
+    }
+    Ok(())
+}
+
 fn verify_open_issue(repository: &str, issue_number: u64) -> Result<(), String> {
     let endpoint = format!("repos/{repository}/issues/{issue_number}");
     let response = github_api(
@@ -1191,6 +1535,28 @@ fn verify_open_issue(repository: &str, issue_number: u64) -> Result<(), String> 
             "GitHub API returned an unexpected response for related issue #{issue_number}: `{response}`"
         )),
     }
+}
+
+fn github_api_raw(endpoint: &str, subject: &str) -> Result<Vec<u8>, String> {
+    let output = Command::new("gh")
+        .args([
+            "api",
+            endpoint,
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+        ])
+        .output()
+        .map_err(|error| format!("could not start GitHub CLI to verify {subject}: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "GitHub API could not verify {subject}: {}",
+            detail.trim()
+        ));
+    }
+    Ok(output.stdout)
 }
 
 fn github_api(
