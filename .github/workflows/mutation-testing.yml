@@ -44,11 +44,18 @@ jobs:
           git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$scratch/changed-paths"
           git -C tools/repo-policy diff --relative --unified=0 \
             "$BASE_SHA" "$HEAD_SHA" > "$scratch/mutation.diff"
-          (
-            cd tools/repo-policy
-            cargo mutants --list --json --no-shuffle \
-              --in-diff "$scratch/mutation.diff"
-          ) > "$scratch/mutants.json"
+          if [ -s "$scratch/mutation.diff" ]; then
+            (
+              cd tools/repo-policy
+              cargo mutants --list --json --no-shuffle \
+                --in-diff "$scratch/mutation.diff"
+            ) > "$scratch/mutants.json"
+            if [ ! -s "$scratch/mutants.json" ]; then
+              printf '[]\n' > "$scratch/mutants.json"
+            fi
+          else
+            printf '[]\n' > "$scratch/mutants.json"
+          fi
           matrix=$(cargo run --quiet --manifest-path tools/repo-policy/Cargo.toml -- \
             mutation-plan \
               .github/quality-targets.toml \
