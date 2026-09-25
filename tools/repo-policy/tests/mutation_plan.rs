@@ -690,6 +690,9 @@ fn runs_bounded_affected_group_mutation_testing_without_secrets() {
     assert!(workflow.contains("mutant_regex=\"( in |replace )${function_pattern}( ->| with|$)\""));
     assert!(workflow.contains("--re \"$mutant_regex\""));
     assert!(!workflow.contains("--re \"$FUNCTION_REGEX\""));
+    assert!(workflow.contains("if [ -s \"$scratch/mutation.diff\" ]; then"));
+    assert!(workflow.contains("if [ ! -s \"$scratch/mutants.json\" ]; then"));
+    assert!(workflow.contains("printf '[]\\n' > \"$scratch/mutants.json\""));
     assert!(workflow.contains("--in-diff"));
     assert!(workflow.contains("validate-mutation-results"));
     assert!(workflow.contains("actions/upload-artifact@"));
