@@ -24,11 +24,34 @@ const VALID_PR_BODY: &str = r#"## Related Issue
 
 - None: application development is excluded.
 
+## Pre-Completion Review
+
+- [x] Requirement fit: Every acceptance criterion is implemented and verified.
+- [x] Boundaries and regressions: Validation remains limited to repository policy.
+- [x] Design: Existing policy parsing remains responsible for validation.
+- [x] Tests: Valid and malformed records are covered.
+- [x] Correctness: Parsed records were inspected.
+- [x] Standards: Repository quality gates pass.
+- [x] Scope: Only approved files changed.
+- [x] Maintainability: The record format is documented.
+- [x] Side effects: Invalid bodies fail the existing check.
+- [x] Documentation: Policy documentation is current.
+- [x] Evidence: Evidence records follow below.
+- [x] Unverified items: No items remain unverified.
+
 ## Evidence
 
-- Repository evidence: `tools/repo-policy/tests/work_item.rs`.
-- External evidence: GitHub API fixtures.
-- Performance evidence or not applicable: Not applicable: this is a CI policy.
+### Repository Evidence
+
+- File: `tools/repo-policy/tests/work item.rs:L1-L10`
+
+### External Evidence
+
+- Not applicable: API behavior is represented by test fixtures.
+
+### Performance Evidence
+
+- Not applicable: this is a CI policy.
 
 ## Executed Quality Gates
 
@@ -142,7 +165,17 @@ case "$endpoint" in
     printf '%b' "${TIMELINE-labeled\t2026-09-22T06:53:07Z\tdevdesignersid\n}"
     ;;
   repos/devdesignersid/buttter/pulls/10)
-    printf '%s\n' "${PR_CREATED_AT-2026-09-22T06:53:08Z}"
+    case "$4" in
+      .created_at) printf '%s\n' "${PR_CREATED_AT-2026-09-22T06:53:08Z}" ;;
+      .head.sha)
+        [ "${REMOVE_GH-}" = true ] && /bin/rm "$0"
+        printf '%s\n' "${HEAD_SHA-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+        ;;
+      *) printf 'unexpected pull query: %s\n' "$4" >&2; exit 94 ;;
+    esac
+    ;;
+  repos/devdesignersid/buttter/contents/tools/repo-policy/tests/work%20item.rs\?ref=*)
+    printf '%b' "${FILE_CONTENT-1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n9\\n10\\n}"
     ;;
   *) printf 'unexpected endpoint: %s\n' "$endpoint" >&2; exit 91 ;;
 esac
@@ -206,6 +239,21 @@ fn accepts_a_complete_work_item_approved_before_pull_request_creation() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, b"Pull request body is valid.\n");
+}
+
+#[test]
+fn validates_repository_evidence_against_the_pull_request_head() {
+    assert_rejected(&[("HEAD_SHA", "invalid")], "head revision");
+    assert_rejected(&[("FILE_CONTENT", "one\\ntwo\\n")], "line range");
+    assert_rejected(&[("FILE_CONTENT", "\\377")], "UTF-8");
+    assert_rejected(&[("REMOVE_GH", "true")], "could not start GitHub CLI");
+    assert_rejected(
+        &[(
+            "FAIL_ENDPOINT",
+            "repos/devdesignersid/buttter/contents/tools/repo-policy/tests/work%20item.rs?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )],
+        "simulated API failure",
+    );
 }
 
 #[test]

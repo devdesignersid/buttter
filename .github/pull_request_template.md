@@ -20,12 +20,40 @@
 <!-- Provide one or more bullet items. Use "None: <reason>" when applicable. -->
 -
 
+## Pre-Completion Review
+
+<!-- Check every field and replace its placeholder with a substantive conclusion. Use "Not applicable: <reason>" only when justified. -->
+- [ ] Requirement fit:
+- [ ] Boundaries and regressions:
+- [ ] Design:
+- [ ] Tests:
+- [ ] Correctness:
+- [ ] Standards:
+- [ ] Scope:
+- [ ] Maintainability:
+- [ ] Side effects:
+- [ ] Documentation:
+- [ ] Evidence:
+- [ ] Unverified items:
+
 ## Evidence
 
-<!-- Complete every field. Use "Not applicable: <reason>" when applicable. -->
-- Repository evidence:
-- External evidence:
-- Performance evidence or not applicable:
+### Repository Evidence
+
+<!-- Provide one or more records. Repeat either format as needed: -->
+<!-- - File: `path/to/file:L10-L20` -->
+<!-- - Command: `reproducible command` | Output: `recorded result` -->
+-
+
+### External Evidence
+
+<!-- Repeat `- Source: https://primary.example/source | Version/revision: <value> | Accessed: YYYY-MM-DD`, or use `- Not applicable: <reason>`. -->
+-
+
+### Performance Evidence
+
+<!-- Provide exactly one command/output record in the Repository Evidence format, or use `- Not applicable: <reason>`. -->
+-
 
 ## Executed Quality Gates
 
@@ -44,5 +72,5 @@
 
 ## Unverified Items
 
-<!-- Provide one or more bullet items. Use "None" when no items remain. -->
+<!-- Provide concrete bullet items, or use exactly `- None`. -->
 -

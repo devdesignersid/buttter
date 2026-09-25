@@ -26,11 +26,34 @@ const VALID_PR_BODY: &str = r#"## Related Issue
 
 - None: all exclusions are listed in the work item.
 
+## Pre-Completion Review
+
+- [x] Requirement fit: Every acceptance criterion is implemented and verified.
+- [x] Boundaries and regressions: Validation remains limited to repository policy.
+- [x] Design: Existing policy parsing remains responsible for validation.
+- [x] Tests: Valid and malformed records are covered.
+- [x] Correctness: Parsed records were inspected.
+- [x] Standards: Repository quality gates pass.
+- [x] Scope: Only approved files changed.
+- [x] Maintainability: The record format is documented.
+- [x] Side effects: Invalid bodies fail the existing check.
+- [x] Documentation: Policy documentation is current.
+- [x] Evidence: Evidence records follow below.
+- [x] Unverified items: No items remain unverified.
+
 ## Evidence
 
-- Repository evidence: `tools/repo-policy/tests/file_scope.rs`.
-- External evidence: GitHub API fixtures.
-- Performance evidence or not applicable: Not applicable: policy validation is bounded.
+### Repository Evidence
+
+- File: `tools/repo-policy/tests/file_scope.rs:L1-L10`
+
+### External Evidence
+
+- Not applicable: API behavior is represented by test fixtures.
+
+### Performance Evidence
+
+- Not applicable: policy validation is bounded.
 
 ## Executed Quality Gates
 

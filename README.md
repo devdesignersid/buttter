@@ -18,7 +18,9 @@ Pull request bodies must follow [the repository template](.github/pull_request_t
 cargo run --manifest-path tools/repo-policy/Cargo.toml -- validate-pr-body path/to/body.md
 ```
 
-CI additionally verifies that the related `Closes #N` reference identifies an open, structurally complete work item. The work item must have a current `implementation-approved` label applied by `devdesignersid` before the pull request was created. The `PR body policy` check is required on `main`, so a ready-for-review pull request cannot merge when validation fails.
+CI additionally verifies that the related `Closes #N` reference identifies an open, structurally complete work item. The work item must have a current `implementation-approved` label applied by `devdesignersid` before the pull request was created. The trusted check also requires the ordered pre-completion review and validates repository evidence against UTF-8 files at the pull request head, structured external-source metadata, performance records, and unverified items. The `PR body policy` check is required on `main`, so a ready-for-review pull request cannot merge when validation fails.
+
+The policy verifies record structure, paths, and line ranges. Human review still determines whether conclusions and recorded outputs are truthful, whether external sources are primary, and whether the design, readability, maintainability, scope, and performance conclusions are adequate. See the [Repository Policy CLI documentation](tools/repo-policy/README.md#enforced-body-contract) for exact syntax.
 
 Each work item must also declare its approved files as a sorted JSON array of exact repository-relative paths between the `approved-paths` markers supplied by the issue template. Dotfiles and generated files require explicit entries; glob and directory patterns are rejected. An authorized `scope-approved sha256:<digest>` comment must bind that declaration before the pull request is created. The trusted `File scope policy` check compares every base-to-head changed path with the declaration and must be required on `main`.
 

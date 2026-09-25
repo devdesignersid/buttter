@@ -32,10 +32,63 @@ test_target = "mutation_plan"
 name = "pr-body"
 target = "repo-policy"
 product_file = "tools/repo-policy/src/main.rs"
-function_regex = "^validate_body$"
+function_regex = "^(is_substantive_conclusion|validate_body|validate_pre_completion_review|validate_unverified_items)$"
+test_paths = [
+  "tools/repo-policy/tests/file_scope.rs",
+  "tools/repo-policy/tests/pr_body.rs",
+  "tools/repo-policy/tests/pr_body_policy_workflow.rs",
+]
+behavior_paths = []
+test_target = "pr_body"
+
+[[groups]]
+name = "pr-evidence"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/main.rs"
+function_regex = "^(parse_command_evidence|parse_file_evidence|validate_performance_evidence|validate_repository_evidence|validate_repository_path)$"
 test_paths = ["tools/repo-policy/tests/pr_body.rs"]
 behavior_paths = []
 test_target = "pr_body"
+
+[[groups.exceptions]]
+outcome = "unviable"
+pattern = "replace validate_repository_evidence.*Default::default"
+reason = "The generated replacement requires FileEvidence to implement Default, but an empty file reference is not a valid domain value."
+
+[[groups.exceptions]]
+outcome = "unviable"
+pattern = "replace parse_file_evidence.*Default::default"
+reason = "The generated replacement requires FileEvidence to implement Default, but an empty file reference is not a valid domain value."
+
+[[groups]]
+name = "pr-external-evidence"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/main.rs"
+function_regex = "^(days_in_month|is_leap_year|valid_https_url|validate_date|validate_external_evidence)$"
+test_paths = ["tools/repo-policy/tests/pr_body.rs"]
+behavior_paths = []
+test_target = "pr_body"
+
+[[groups]]
+name = "pr-local-file-evidence"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/main.rs"
+function_regex = "^(validate_file_contents|validate_local_file_evidence)$"
+test_paths = ["tools/repo-policy/tests/pr_body.rs"]
+behavior_paths = []
+test_target = "pr_body"
+
+[[groups]]
+name = "pr-remote-file-evidence"
+target = "repo-policy"
+product_file = "tools/repo-policy/src/main.rs"
+function_regex = "^(github_api_raw|percent_encode_path|run_validate_pr_body|validate_remote_file_evidence)$"
+test_paths = [
+  "tools/repo-policy/tests/pr_remote_evidence.rs",
+  "tools/repo-policy/tests/work_item.rs",
+]
+behavior_paths = []
+test_target = "pr_remote_evidence"
 
 [[groups]]
 name = "quality"
