@@ -164,7 +164,9 @@ Scope expansion requires a new work-item declaration and a new digest-bound appr
 
 Only `rust` targets are currently permitted. `linux` maps to `ubuntu-24.04`; `macos` maps to `macos-15`. Adding another target or platform requires a manifest and policy change rather than an unregistered workflow command.
 
-`run-quality-target` verifies the pinned tool versions, then runs Rustfmt, Clippy with warnings denied, and `cargo llvm-cov`. The coverage command executes the target's tests while producing LCOV, so tests are not run twice. LCOV must contain every Rust product file, no non-product file, valid line records, and no line with a zero execution count. Missing tools, nonzero subprocess results, missing files, malformed reports, and omitted files fail closed. Tests, generated paths, third-party paths, and supporting files are outside the product-code line denominator.
+`run-quality-target` verifies the pinned tool versions, then runs Rustfmt, Clippy, and `cargo llvm-cov`. Clippy denies compiler warnings, `clippy::all`, and the additional high-signal lints listed in [`docs/RUST_CODE_SMELLS.md`](../../docs/RUST_CODE_SMELLS.md#mechanically-enforced-baseline). The coverage command executes the target's tests while producing LCOV, so tests are not run twice. LCOV must contain every Rust product file, no non-product file, valid line records, and no line with a zero execution count. Missing tools, nonzero subprocess results, missing files, malformed reports, and omitted files fail closed. Tests, generated paths, third-party paths, and supporting files are outside the product-code line denominator.
+
+Static analysis enforces only objective subsets of the Rust reference. Context-sensitive ownership, API, concurrency, architecture, and performance findings remain mandatory human and agent review items. A justified lint exception must use the narrowest item-level `#[expect(clippy::lint_name, reason = "...")]`; crate-wide suppression, lint-group suppression, and unexplained `#[allow(...)]` are not accepted.
 
 ## Mutation-testing contract
 
@@ -370,7 +372,21 @@ The individual Rust gates remain useful while iterating:
 
 ```sh
 cargo fmt --manifest-path tools/repo-policy/Cargo.toml -- --check
-cargo clippy --manifest-path tools/repo-policy/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path tools/repo-policy/Cargo.toml --all-targets -- \
+  -D warnings \
+  -D clippy::all \
+  -D clippy::dbg_macro \
+  -D clippy::todo \
+  -D clippy::unimplemented \
+  -D clippy::undocumented_unsafe_blocks \
+  -D clippy::multiple_unsafe_ops_per_block \
+  -D clippy::await_holding_lock \
+  -D clippy::large_futures \
+  -D clippy::large_stack_arrays \
+  -D clippy::large_types_passed_by_value \
+  -D clippy::rc_buffer \
+  -D clippy::mutex_atomic \
+  -D clippy::zombie_processes
 cargo test --manifest-path tools/repo-policy/Cargo.toml
 cargo llvm-cov --manifest-path tools/repo-policy/Cargo.toml --fail-under-lines 100
 ```

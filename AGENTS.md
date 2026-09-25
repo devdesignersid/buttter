@@ -53,6 +53,7 @@ These instructions apply to the entire repository.
 
 ## Implementation
 
+- Follow the [Rust code-smell and anti-pattern reference](docs/RUST_CODE_SMELLS.md) when writing or reviewing Rust. Run the registered repository quality target and report every applicable review-only finding.
 - Prefer executable quality gates over prose standards.
 - Before using a third-party API, review the documented failure modes for the exact dependency version.
 - Handle, propagate, or explicitly rule out each documented failure mode according to the approved behavior; never silently discard an error.

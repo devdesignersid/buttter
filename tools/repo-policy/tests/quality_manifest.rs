@@ -809,6 +809,20 @@ fn runs_every_rust_gate_with_pinned_tools_and_validates_reports() {
         "fmt --manifest-path",
         "clippy --manifest-path",
         "llvm-cov --manifest-path",
+        "-D warnings",
+        "-D clippy::all",
+        "-D clippy::dbg_macro",
+        "-D clippy::todo",
+        "-D clippy::unimplemented",
+        "-D clippy::undocumented_unsafe_blocks",
+        "-D clippy::multiple_unsafe_ops_per_block",
+        "-D clippy::await_holding_lock",
+        "-D clippy::large_futures",
+        "-D clippy::large_stack_arrays",
+        "-D clippy::large_types_passed_by_value",
+        "-D clippy::rc_buffer",
+        "-D clippy::mutex_atomic",
+        "-D clippy::zombie_processes",
     ] {
         assert!(log.contains(expected), "missing `{expected}` in {log}");
     }
