@@ -2,5 +2,21 @@
   "packages": [
     "git:github.com/devdesignersid/pi-smart-model-router@ce696196454c9d9a539960466485b7d514396faa",
     "git:github.com/devdesignersid/pi-smart-compaction@ae2dab6bc50e7f316c95f1357892432f7525df39"
-  ]
+  ],
+  "compaction": {
+    "modelOverrides": {
+      "openai-codex/gpt-5.3-codex-spark": {
+        "reserveTokens": 38400
+      },
+      "openai-codex/gpt-5.6-luna": {
+        "reserveTokens": 81600
+      },
+      "openai-codex/gpt-5.6-sol": {
+        "reserveTokens": 81600
+      },
+      "openai-codex/gpt-5.6-terra": {
+        "reserveTokens": 81600
+      }
+    }
+  }
 }
